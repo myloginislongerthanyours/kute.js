@@ -31,27 +31,35 @@
   if (isIE&&isIE<9) {return;} // return if SVG API is not supported
 
   // here we go with the plugin
-  var pathReg = /(m[^(h|v|l)]*|[vhl][^(v|h|l|z)]*)/gmi, ns = 'http://www.w3.org/2000/svg',
-    // function(array1, array2, length, progress) for SVG morph
-    coords = g.Interpolate.coords = isMobile ? function(a,b,l,v) { 
-      var points = [];
-      for(var i=0;i<l;i++) { // for each point
-        points[i] = [];
-        for(var j=0;j<2;j++) { // each point coordinate
-          points[i].push( (a[i][j]+(b[i][j]-a[i][j])*v) >> 0 );
-        }
-      }
-      return points;
-    } : function(a,b,l,v) { // on desktop devices we use subpixel accuracy for morph
-      var points = [];
-      for(var i=0;i<l;i++) { // for each point
-        points[i] = [];
-        for(var j=0;j<2;j++) { // each point coordinate
-          points[i].push( ((a[i][j]+(b[i][j]-a[i][j])*v) * 10 >> 0)/10 );
-        }
-      }
-      return points;
-    };
+  var pathRegs = {
+      minimalQualifier : /^\s*m/i,
+      fullQualifier    : /^\s*m(?:(?:\s*[mlhv]\s*)|(?:\s*(?:[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(?:,(?=\s*[-+.\d]))?))+z\s*$/i,
+      stickyTokenizer   : /(?:\s*([mlhvz])\s*)|(?:\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(?:,(?=\s*[-+.\d]))?)/iy,
+      pedanticTokenizer : /(?:\s*([mlhvz])\s*)|(?:\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(?:,(?=\s*[-+.\d]))?)|((?:[^-+\d.emlhvz]|[-+](?!\.?\d)|\.(?!\d)|e)+)/gi,
+  },
+  ns = 'http://www.w3.org/2000/svg',
+  trunc = [ // truncate to 0-2 decimal places
+    function(v) { return v >> 0; },
+    function(v) { return ((v * 10) >> 0) / 10; },
+    function(v) { return ((v * 100) >> 0) / 100; }, ],
+  round = [ // round to 0-2 decimal places
+    function(v) { return Math.round(v); },
+    function(v) { return Math.round(v * 10) / 10; },
+    function(v) { return Math.round(v * 100) / 100; }, ],
+  coordPrecision = isMobile ? trunc[0] : round[1], // use truncation on mobile, subpixel rounding on desktop
+  // function(array1, array2, length, progress) for SVG morph
+  coords = g.Interpolate.coords = function(a,b,l,v) {
+    var d = "M", ai, ai0, ai1, bi, bd0, bd1;
+    for (var i = 0; i < l; i++) {
+      ai = a[i]; bi = b[i];
+      ai0 = ai[0]; bd0 = bi[0] - ai0;
+      ai1 = ai[1]; bd1 = bi[1] - ai1;
+      d += " "; d += coordPrecision(ai0 + bd0 * v);
+      d += " "; d += coordPrecision(ai1 + bd1 * v);
+    }
+    d += "Z";
+    return d;
+  };
 
 
   // SVG MORPH
@@ -80,29 +88,54 @@
       : Math.abs(s[dx][0] - t.x) < p && Math.abs(s[dx][1] - t.y) < p ? s[dx]
       : [t.x,t.y];
     },
-    pathToAbsolute = function(p) { // simple utility for polygons | this is still BETA / a work in progress
-      var np = p.match(pathReg), wp = [], l = np.length, s, c, r, x = 0, y = 0;
-      for (var i = 0; i<l; i++){
-        np[i] = np[i]; c = np[i][0]; r = new RegExp(c+'[^\\d|\\-]*','i');
-        np[i] = np[i].replace(/(^|[^,])\s*-/g, '$1,-').replace(/(\s+\,|\s|\,)/g,',').replace(r,'').split(',');
-        np[i][0] = parseFloat(np[i][0]);
-        np[i][1] = parseFloat(np[i][1]);
-        if (i === 0) { x+=np[i][0]; y +=np[i][1]; }
-        else {
-          x = np[i-1][0];
-          y = np[i-1][1];
-          if (/l/i.test(c)) {
-            np[i][0] = c === 'l' ? np[i][0] + x : np[i][0];
-            np[i][1] = c === 'l' ? np[i][1] + y : np[i][1];
-          } else if (/h/i.test(c)) {
-            np[i][0] = c === 'h' ? np[i][0] + x : np[i][0];
-            np[i][1] = y;
-          } else if (/v/i.test(c)) {
-            np[i][0] = x;
-            np[i][1] = c === 'v' ? np[i][0] + y : np[i][0];
+    pathToAbsolute = function(p) { // converts polygon paths to absolute coordinates
+      var np = [], cc = [0, 0], e = 0, t0, t1, f,
+          qre = pathRegs.minimalQualifier,
+          tre = pathRegs.stickyTokenizer;
+      var nextToken = function() {
+        var m = tre.exec(p);
+        if (!m) return m;                  // no match
+        if (m[1]) return m[1];             // command
+        if (m[2]) return parseFloat(m[2]); // number
+        if (m[3]) return m[3];             // invalid (pedanticTokenizer only)
+      };
+      tre.lastIndex = 0;
+
+      if (qre.test(p)) { // if p looks like a path...
+        parse: while (t0 || (t0 = nextToken())) {
+
+          // handle command
+          switch (t0) {
+          case "M": case "L": e = 13; break; // x, y absolute
+          case "m": case "l": e = 24; break; // x, y relative
+          case "H":           e = 1; break;  // x absolute
+          case "h":           e = 2; break;  // x relative
+          case "V":           e = 3; break;  // y absolute
+          case "v":           e = 4; break;  // y relative
+          case "z": case "Z": break parse;   // end of path
+          default: break parse; // error: not a command
           }
+
+          // handle arguments
+          f = true;
+          while (typeof (t0 = nextToken()) === "number"
+            && (e < 10
+                || typeof (t1 = nextToken()) === "number"
+                  && e < 100)) {
+            switch (e) {
+            case 1:  cc[0]  = t0; break;
+            case 2:  cc[0] += t0; break;
+            case 3:               cc[1]  = t0; break;
+            case 4:               cc[1] += t0; break;
+            case 13: cc[0]  = t0; cc[1]  = t1; break;
+            case 24: cc[0] += t0; cc[1] += t1; break;
+            }
+            np.push(cc.slice()); f = false;
+          }
+          if (f) break parse; // error: missing arguments
         }
       }
+      // XXX error handling should go here
       return np;
     },
     getOnePath = function(p){ return p.split(/z/i).shift() + 'z'; }, // we only tween first path only
@@ -189,7 +222,7 @@
   parseProperty.path = function(o,v) {
     if (!('path' in DOM)) {
       DOM.path = function(l,p,a,b,v){
-        l.setAttribute("d", v === 1 ? b.o : 'M' + coords( a['d'],b['d'],b['d'].length,v ) + 'Z' );
+        l.setAttribute("d", v === 1 ? b.o : coords( a['d'],b['d'],b['d'].length,v ) );
       }
     }
     return getPath(v);
