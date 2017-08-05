@@ -140,7 +140,7 @@ var tween = KUTE.to('#rectangle', { path: 'M301.113,12.011l99.25,179.996l201.864
 
             <p>As you can see, the animation could need some fine tunning. Let's go ahead and play with the new <a href="http://codepen.io/thednp/pen/YGayLg">utility</a>, it's gonna make your SVG morph work a breeze.</p>
 
-            <p>Well, we're going to set the <code>morphIndex: 127</code> tween option and we will get an improved morph. Sometimes the recommended value isn't what we're looking for, so you just have to experience values 
+            <p>Well, we're going to set the <code>morphIndex: 136</code> tween option and we will get an improved morph. Sometimes the recommended value isn't what we're looking for, so you just have to experience values 
                 around the recommended one. I also made a <a href="http://codepen.io/thednp/pen/bpRRZd" target="_blank">pen</a> for you to play with.</p>
             <div class="featurettes">
                 <svg class="example-box-model example-box" id="morph-example1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600">
@@ -160,7 +160,7 @@ var tween = KUTE.to('#rectangle', { path: 'M301.113,12.011l99.25,179.996l201.864
             <p>When your paths are only <code>lineto</code>, <code>vertical-lineto</code> and <code>horizontal-lineto</code> based shapes (the <code>d</code> attribute consists of <code>L</code>, <code>V</code> and 
                 <code>H</code> path commands), the SVG Plugin will work differently: it will use their points instead of sampling new ones. As a result, we boost the visual and maximize the performance. The 
                 <code>morphPrecision</code> option will not apply since the paths are already polygons, still you will have access to all the other options.</p>
-            <p>The plugin will try to convert paths to absolute values for polygons, but it might not find most accurate coordinates values for relative <code>v</code> and <code>h</code> path commands. I highly 
+            <p>The plugin will convert paths to absolute values for polygons, but if you feel that you need more control, I highly 
                 recommend using my <a href="http://codepen.io/thednp/full/EgVqLw/">utility converter</a> to prepare your paths in that case.</p>
 
             <pre><code class="language-javascript">// let's morph a triangle into a star
@@ -253,7 +253,8 @@ var multiMorph3 = KUTE.to('#w12', { path: '#w23' }).start();
                 </div>
             </div>
             <p>Note that this final touch required using <code>reverseSecondPath:true</code> option for all tweens because each shape have a slightly different position from its corresponding shape, so make sure to 
-                check the <a href="assets/js/svg.js" target="_blank">svg.js</a> for a full code review.</p>
+                check the <a href="assets/js/svg.js" target="_blank">svg.js</a> for a full code review. (Actually, it didn't, because by default KUTE.js makes sure that all patha are ordered counter-clockwise,
+                but do look at the code anyway. It's the best way to learn.)</p>
 
             <h4>Complex Example</h4>
             <p>The last morph example is a bit more complex as the paths have subpaths with different positions and other important differences such as having different amounts of subpaths as well as significant 
