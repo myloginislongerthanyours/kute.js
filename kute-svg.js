@@ -37,6 +37,8 @@
       stickyTokenizer   : /(?:\s*([mlhvz])\s*)|(?:\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(?:,(?=\s*[-+.\d]))?)/iy,
       pedanticTokenizer : /(?:\s*([mlhvz])\s*)|(?:\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(?:,(?=\s*[-+.\d]))?)|((?:[^-+\d.emlhvz]|[-+](?!\.?\d)|\.(?!\d)|e)+)/gi,
   },
+  defaultQualifier = pathRegs.minimalQualifier,
+  defaultTokenizer = isIE ? pathRegs.pedanticTokenizer : pathRegs.stickyTokenizer,
   ns = 'http://www.w3.org/2000/svg',
   trunc = [ // truncate to 0-2 decimal places
     function(v) { return v >> 0; },
@@ -49,13 +51,13 @@
   coordPrecision = isMobile ? trunc[0] : round[1], // use truncation on mobile, subpixel rounding on desktop
   // function(array1, array2, length, progress) for SVG morph
   coords = g.Interpolate.coords = function(a,b,l,v) {
-    var d = "M", ai, ai0, ai1, bi, bd0, bd1;
+    var d = "M", ai, ai0, ai1, bi, bd0, bd1, cp = coordPrecision;
     for (var i = 0; i < l; i++) {
       ai = a[i]; bi = b[i];
       ai0 = ai[0]; bd0 = bi[0] - ai0;
       ai1 = ai[1]; bd1 = bi[1] - ai1;
-      d += " "; d += coordPrecision(ai0 + bd0 * v);
-      d += " "; d += coordPrecision(ai1 + bd1 * v);
+      d += " "; d += cp(ai0 + bd0 * v);
+      d += " "; d += cp(ai1 + bd1 * v);
     }
     d += "Z";
     return d;
@@ -65,7 +67,7 @@
   // SVG MORPH
   var getSegments = function(s,e,r){ // getSegments returns an array of points based on a sample size morphPrecision
       var s1 = [], e1 = [], le1 = s.getTotalLength(), le2 = e.getTotalLength(), ml = Math.max(le1,le2),
-        d = r, ar = ml / r, j = 0, sl = ar*r; // sl = sample length
+        ar = ml / r, j = 0, sl = ar*r; // sl = sample length
 
       while ( (j += r) < sl ) { // populate the points arrays based on morphPrecision as sample size
         s1.push( [s.getPointAtLength(j).x, s.getPointAtLength(j).y]);
@@ -73,25 +75,41 @@
       }
       return [s1,e1];
     },
-    getClosestPoint = function(p,t,s){ // utility for polygon paths, returns a close point from the original path (length,pointAtLength,smallest); // intervalLength
-      var x, y, a = [], l = s.length, dx, nx, pr;
-      for (var i=0; i<l; i++){
-        x = Math.abs(s[i][0] - t.x);
-        y = Math.abs(s[i][1] - t.y);
-        a.push( Math.sqrt( x * x + y * y ) );
+    getClosestPoint = function(il, t, s){ // utility for polygon paths, returns a close point from the original path (inputs: sample length, target point, source path)
+      var l = s.length, x, y, d, cd = Infinity, ci = -1, c, n, p;
+      
+      // find index of point closest to t (ci)
+      for (var i = 0;  i < l; i++){
+        x = s[i][0] - t.x;
+        y = s[i][1] - t.y;
+        d = Math.sqrt( x * x + y * y );
+        if (d < cd) {
+          cd = d;
+          ci = i;
+        }
       }
-      dx = a.indexOf(Math.min.apply(null,a));
-      pr = !!s[dx-1] ? dx-1 : l-1;
-      nx = !!s[dx+1] ? dx+1 : 0;
-      return Math.abs(s[pr][0] - t.x) < p && Math.abs(s[pr][1] - t.y) < p ? s[pr]
-      : Math.abs(s[nx][0] - t.x) < p && Math.abs(s[nx][1] - t.y) < p ? s[nx]
-      : Math.abs(s[dx][0] - t.x) < p && Math.abs(s[dx][1] - t.y) < p ? s[dx]
-      : [t.x,t.y];
+
+      // XXX: the algorithm works nicely for the polygon demo; it's not general.
+      // XXX: assumes closed path
+      p = s[(ci - 1 + l) % l]; // prev
+      n = s[(ci + 1) % l];     // next
+      c = s[ci];               // closest
+      
+      // pick the proper point to return:
+      switch (true) {
+      case Math.abs(p[0] - t.x) < il
+        && Math.abs(p[1] - t.y) < il: return p;
+      case Math.abs(n[0] - t.x) < il
+        && Math.abs(n[1] - t.y) < il: return n;
+      case Math.abs(c[0] - t.x) < il
+        && Math.abs(c[1] - t.y) < il: return c;
+      default:                        return [t.x, t.y];
+      }
     },
-    pathToAbsolute = function(p) { // converts polygon paths to absolute coordinates
-      var np = [], cc = [0, 0], e = 0, t0, t1, f,
-          qre = pathRegs.minimalQualifier,
-          tre = pathRegs.stickyTokenizer;
+    pathToAbsolute = function(p) { // converts polygon paths to absolute coordinates in ccw winding
+      var np = [], cc = [0, 0], lc, fc, t0, t1, e = 0, w = 0, f,
+          qre = defaultQualifier,
+          tre = defaultTokenizer;
       var nextToken = function() {
         var m = tre.exec(p);
         if (!m) return m;                  // no match
@@ -130,11 +148,37 @@
             case 13: cc[0]  = t0; cc[1]  = t1; break;
             case 24: cc[0] += t0; cc[1] += t1; break;
             }
-            np.push(cc.slice()); f = false;
+
+            // winding - regular term
+            if (lc) w += (cc[0] - lc[0]) * (cc[1] + lc[1]);
+            else fc = cc; // note first point
+
+            // store current coordinate
+            np.push(cc.slice()); f = false; lc = cc;
           }
           if (f) break parse; // error: missing arguments
         }
       }
+
+      // winding - last term, and normalization to ccw
+      if (fc) {
+        if (fc[0] === lc[0] && fc[1] === lc[1]) {
+          // explicitly closed
+          if (w > 0) { // reverse winding, drop duplicated point
+            np.reverse();
+            np = np.slice(0, -1);
+          }
+        }
+        else {
+          // implicitly closed
+          w += (fc[0] - lc[0]) * (fc[1] + lc[1]);
+          if (w > 0) { // reverse winding, preserve start point
+            np.reverse();
+            np = np.slice(-1).concat(np.slice(0, -1));
+          }
+        }
+      }
+      
       // XXX error handling should go here
       return np;
     },
@@ -173,7 +217,7 @@
       return p;
     },
     computePathCross = function(s,e){ // pathCross
-      var s1, e1, pointsArray, largerPathLength, smallerPath, largerPath, simulatedSmallerPath, nsm = [], sml, cl = [], len, tl, cs,
+      var s1, e1, pointsArray, largerPathLength, smallerPath, largerPath, simulatedSmallerPath, nsm = [], sml, len, tl, cs,
         index = this.options.morphIndex;
 
       if (!this._isPolygon) {
