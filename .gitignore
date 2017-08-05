@@ -1,2 +1,7 @@
 node_modules/
 bower_components/
+*.DS_Store
+tmp_ignore/
+package-lock.json
+.settings/
+.project
