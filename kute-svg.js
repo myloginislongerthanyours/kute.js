@@ -65,15 +65,40 @@
 
 
   // SVG MORPH
-  var getSegments = function(s,e,r){ // getSegments returns an array of points based on a sample size morphPrecision
-      var s1 = [], e1 = [], le1 = s.getTotalLength(), le2 = e.getTotalLength(), ml = Math.max(le1,le2),
-        ar = ml / r, j = 0, sl = ar*r; // sl = sample length
+  var getSegments = function(a, b, minPrec) {
+      var al = a.getTotalLength(), bl = b.getTotalLength(),
+        ll = (al > bl) ? al : bl, sl = (al > bl) ? bl : al,
+        l = (al > bl) ? a : b,    s = (al > bl) ? b : a,
+        lPrec = minPrec,          sPrec = lPrec * sl / ll,
+        steps = (ll / lPrec) >> 0,
+        nl = new Array(steps),    ns = new Array(steps),
+        start, w, i, p;
 
-      while ( (j += r) < sl ) { // populate the points arrays based on morphPrecision as sample size
-        s1.push( [s.getPointAtLength(j).x, s.getPointAtLength(j).y]);
-        e1.push( [e.getPointAtLength(j).x, e.getPointAtLength(j).y]);
+      // longer polygon
+      for (i = start = w = 0; i < steps; i++) {
+        p = l.getPointAtLength(start); start += lPrec;
+        nl[i] = [ p.x, p.y ];
+        if (i) w += (nl[i][0] - nl[i-1][0]) * (nl[i][1] + nl[i-1][1]);
       }
-      return [s1,e1];
+      w += (nl[0][0] - nl[steps-1][0]) * (nl[0][1] + nl[steps-1][1]);
+      if (w > 0) { // reverse winding, preserve start point
+        nl.reverse();
+        nl = nl.slice(-1).concat(nl.slice(0, -1));
+      }
+
+      // shorter polygon
+      for (i = start = w = 0; i < steps; i++) {
+        p = s.getPointAtLength(start); start += sPrec;
+        ns[i] = [ p.x, p.y ];
+        if (i) w += (ns[i][0] - ns[i-1][0]) * (ns[i][1] + ns[i-1][1]);
+      }
+      w += (ns[0][0] - ns[steps-1][0]) * (ns[0][1] + ns[steps-1][1]);
+      if (w > 0) { // reverse winding, preserve start point
+        ns.reverse();
+        ns = ns.slice(-1).concat(ns.slice(0, -1));
+      }
+      
+      return (al > bl) ? [ nl, ns ] : [ ns, nl ];
     },
     getClosestPoint = function(il, t, s){ // utility for polygon paths, returns a close point from the original path (inputs: sample length, target point, source path)
       var l = s.length, x, y, d, cd = Infinity, ci = -1, c, n, p;
