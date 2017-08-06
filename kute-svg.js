@@ -65,40 +65,35 @@
 
 
   // SVG MORPH
-  var getSegments = function(a, b, minPrec) {
+  var getSegments = function(a, b, minPrec) { // uniformly sample max(len(a), len(b))/minPrec coordinates in ccw winding
       var al = a.getTotalLength(), bl = b.getTotalLength(),
         ll = (al > bl) ? al : bl, sl = (al > bl) ? bl : al,
-        l = (al > bl) ? a : b,    s = (al > bl) ? b : a,
+        l  = (al > bl) ? a : b,   s  = (al > bl) ? b : a,
         lPrec = minPrec,          sPrec = lPrec * sl / ll,
-        steps = (ll / lPrec) >> 0,
-        nl = new Array(steps),    ns = new Array(steps),
-        start, w, i, p;
-
-      // longer polygon
-      for (i = start = w = 0; i < steps; i++) {
-        p = l.getPointAtLength(start); start += lPrec;
-        nl[i] = [ p.x, p.y ];
-        if (i) w += (nl[i][0] - nl[i-1][0]) * (nl[i][1] + nl[i-1][1]);
-      }
-      w += (nl[0][0] - nl[steps-1][0]) * (nl[0][1] + nl[steps-1][1]);
-      if (w > 0) { // reverse winding, preserve start point
-        nl.reverse();
-        nl = nl.slice(-1).concat(nl.slice(0, -1));
-      }
-
-      // shorter polygon
-      for (i = start = w = 0; i < steps; i++) {
-        p = s.getPointAtLength(start); start += sPrec;
-        ns[i] = [ p.x, p.y ];
-        if (i) w += (ns[i][0] - ns[i-1][0]) * (ns[i][1] + ns[i-1][1]);
-      }
-      w += (ns[0][0] - ns[steps-1][0]) * (ns[0][1] + ns[steps-1][1]);
-      if (w > 0) { // reverse winding, preserve start point
-        ns.reverse();
-        ns = ns.slice(-1).concat(ns.slice(0, -1));
-      }
+        steps = trunc[0](ll / lPrec);
       
-      return (al > bl) ? [ nl, ns ] : [ ns, nl ];
+      var handlePath = function(path, prec) {
+        var curr, w, i, p, coords = new Array(steps);
+        for (i = curr = w = 0; i < steps; i++, curr += prec) {
+          // sample point
+          p = path.getPointAtLength(curr);
+          coords[i] = [ p.x, p.y ];
+          // keep track of winding
+          if (i) w += (coords[i][0] - coords[i-1][0]) * (coords[i][1] + coords[i-1][1]);
+        }
+        // last winding step
+        w += (coords[0][0] - coords[steps-1][0]) * (coords[0][1] + coords[steps-1][1]);
+        if (w > 0) {
+          // if cw, reverse, preserving start point
+          coords.reverse();
+          coords = coords.slice(-1).concat(coords.slice(0, -1));
+        }
+        return coords;
+      };
+
+      return (al > bl)
+        ? [ handlePath(l, lPrec), handlePath(s, sPrec) ]
+        : [ handlePath(s, sPrec), handlePath(l, lPrec) ];
     },
     getClosestPoint = function(il, t, s){ // utility for polygon paths, returns a close point from the original path (inputs: sample length, target point, source path)
       var l = s.length, x, y, d, cd = Infinity, ci = -1, c, n, p;
@@ -188,16 +183,16 @@
       // winding - last term, and normalization to ccw
       if (fc) {
         if (fc[0] === lc[0] && fc[1] === lc[1]) {
-          // explicitly closed
-          if (w > 0) { // reverse winding, drop duplicated point
+          // explicitly closed, last term is already included
+          if (w > 0) { // if cw, reverse, drop duplicated point
             np.reverse();
             np = np.slice(0, -1);
           }
         }
         else {
-          // implicitly closed
+          // implicitly closed, add last term
           w += (fc[0] - lc[0]) * (fc[1] + lc[1]);
-          if (w > 0) { // reverse winding, preserve start point
+          if (w > 0) { // if cw, reverse, preserving start point
             np.reverse();
             np = np.slice(-1).concat(np.slice(0, -1));
           }
