@@ -95,36 +95,61 @@
         ? [ handlePath(l, lPrec), handlePath(s, sPrec) ]
         : [ handlePath(s, sPrec), handlePath(l, lPrec) ];
     },
-    getClosestPoint = function(il, t, s){ // utility for polygon paths, returns a close point from the original path (inputs: sample length, target point, source path)
-      var l = s.length, x, y, d, cd = Infinity, ci = -1, c, n, p;
-      
-      // find index of point closest to t (ci)
-      for (var i = 0;  i < l; i++){
-        x = s[i][0] - t.x;
-        y = s[i][1] - t.y;
-        d = Math.sqrt( x * x + y * y );
-        if (d < cd) {
-          cd = d;
-          ci = i;
-        }
-      }
+    expandTools = {
+        dup : 1,
+        onlydup : 2,
+        split: 3,
+        onlysplit : 4,
+        prev : function(arr, ind) { return arr[(ind - 1 + arr.length) % arr.length]; },
+        next : function(arr, ind) { return arr[(ind + 1) % arr.length]; },
+        dist : function(a, b) { var d0 = b[0] - a[0], d1 = b[1] - a[1]; return (d0 === 0 && d1 === 0) ? 0 : Math.sqrt(d0 * d0 + d1 * d1); },
+        dwrap : function(arr, ind) { return expandTools.dist(expandTools.prev(arr, ind), arr[ind]) + expandTools.dist(arr[ind], expandTools.next(arr, ind)); },
+        dnext : function(arr, ind) { return expandTools.dist(arr[ind], expandTools.next(arr, ind)); },
+    },
+    expandToNSamples = function(s, n, mode) { // generates n - s.length additional samples by a combination of methods. needs optimization!
+      var l, r, m, ns, ord, prio, i, o, curr, next, et = expandTools, mode = mode || et.dup; 
 
-      // XXX: the algorithm works nicely for the polygon demo; it's not general.
-      // XXX: assumes closed path
-      p = s[(ci - 1 + l) % l]; // prev
-      n = s[(ci + 1) % l];     // next
-      c = s[ci];               // closest
-      
-      // pick the proper point to return:
-      switch (true) {
-      case Math.abs(p[0] - t.x) < il
-        && Math.abs(p[1] - t.y) < il: return p;
-      case Math.abs(n[0] - t.x) < il
-        && Math.abs(n[1] - t.y) < il: return n;
-      case Math.abs(c[0] - t.x) < il
-        && Math.abs(c[1] - t.y) < il: return c;
-      default:                        return [t.x, t.y];
+      while (n > (l = s.length)) {
+        r = n - l;           // remaining samples to generate
+        m = (r < l) ? r : l; // max samples from this pass (split mode may reduce this)
+        switch (mode) {
+        // duplicate vertices
+        case et.dup:
+          mode = et.split;
+        case et.onlydup:
+          if (r < l) { // we can't dup everything; set priorities by sum of distances to neighboring points
+            ord = new Array(l); for (i = 0; i < l; i++) ord[i] = i;
+            ord.sort(function(l, r) { return et.dwrap(s, r) - et.dwrap(s, l); });
+            prio = []; for (i = 0; i < l; i++) prio[ord[i]] = i;
+          }
+          ns = new Array(l + m);
+          for (i = 0, o = 0; i < l; i++) {
+            ns[o++] = curr = s[i];      // copy every time
+            if (r >= l || prio[i] < r)  // duplicate if needed
+              ns[o++] = curr;
+          }
+          break;
+        // split edges
+        case et.split:
+          mode = et.dup;
+        case et.onlysplit:
+          // always set priorities by distance to next point to avoid splitting between duplicates
+          ord = new Array(l); for (i = 0; i < l; i++) ord[i] = i;
+          ord.sort(function(l, r) { return et.dnext(s, r) - et.dnext(s, l); });
+          prio = []; for (i = 0, m = 0; i < l; i++) if (et.dnext(s, ord[i]) > 0) { prio[ord[i]] = i; m++; }
+          ns = new Array(l + ((m > r) ? r : m)); // m has been modified to account for 0-length edges
+          for (i = 0, o = 0; i < l; i++) {
+            ns[o++] = curr = s[i];             // copy every time
+            if (prio[i] > -1 && prio[i] < r) { // split if needed
+              next = et.next(s, i);
+              ns[o++] = [next[0] + (curr[0] - next[0]) / 2, next[1] + (curr[1] - next[1]) / 2];
+            }
+          }
+          break;
+        }
+        s = ns;
       }
+      return s;
     },
     pathToAbsolute = function(p) { // converts polygon paths to absolute coordinates in ccw winding
       var np = [], cc = [0, 0], lc, fc, t0, t1, e = 0, w = 0, f,
@@ -173,8 +198,8 @@
             if (lc) w += (cc[0] - lc[0]) * (cc[1] + lc[1]);
             else fc = cc; // note first point
 
-            // store current coordinate
-            np.push(cc.slice()); f = false; lc = cc;
+            // store current coordinate, mark success, iterate
+            np.push(cc); f = false; lc = cc; cc = cc.slice();
           }
           if (f) break parse; // error: missing arguments
         }
@@ -184,13 +209,14 @@
       if (fc) {
         if (fc[0] === lc[0] && fc[1] === lc[1]) {
           // explicitly closed, last term is already included
-          if (w > 0) { // if cw, reverse, drop duplicated point
+          np = np.slice(0, -1); // drop duplicated point
+          if (w > 0) { // if cw, reverse, preserving start point
             np.reverse();
-            np = np.slice(0, -1);
+            np = np.slice(-1).concat(np.slice(0, -1));
           }
         }
         else {
-          // implicitly closed, add last term
+          // implicitly closed, add last term to w
           w += (fc[0] - lc[0]) * (fc[1] + lc[1]);
           if (w > 0) { // if cw, reverse, preserving start point
             np.reverse();
@@ -203,93 +229,192 @@
       return np;
     },
     getOnePath = function(p){ return p.split(/z/i).shift() + 'z'; }, // we only tween first path only
-    createPath = function (p){ // create a <path> when glyph
-      var createdPath = document.createElementNS(ns,'path'), d = typeof p === 'object' ? p.getAttribute('d') : p;
-      createdPath.setAttribute('d',d); return createdPath;
+    pathStringFromRect = function(e) { // build a path string from the attributes of a rect object (XXX verify units)
+      var x = parseFloat(e.getAttribute("x")),
+          y = parseFloat(e.getAttribute("y")),
+          width = parseFloat(e.getAttribute("width")),
+          height = parseFloat(e.getAttribute("height")),
+          rx = parseFloat(e.getAttribute("rx")),
+          ry = parseFloat(e.getAttribute("ry")),
+          d = "M";
+      
+      if (isNaN(rx) && isNaN(ry)) rx = ry = 0;
+      else if (rx > 0 && isNaN(ry)) ry = rx;
+      else if (ry > 0 && isNaN(rx)) rx = ry;
+      if (rx > width / 2) rx = width / 2;      
+      if (ry > height / 2) rx = height / 2;
+      
+      d += (x + rx) + " " + y;
+      d += "H" + (x + width - rx);
+      if (rx * ry > 0)
+        d += "A" + rx + " " + ry +" 0 0 1 " + (x + width) + " " + (y + ry); 
+      d += "V" + (y + height - ry);
+      if (rx * ry > 0)
+        d += "A" + rx + " " + ry +" 0 0 1 " + (x + width - rx) + " " + (y + height); 
+      d += "H" + (x + rx);
+      if (rx * ry > 0)
+        d += "A" + rx + " " + ry +" 0 0 1 " + x + " " + (y + height - ry); 
+      d += "V" + (y + ry);
+      if (rx * ry > 0)
+        d += "A" + rx + " " + ry +" 0 0 1 " + (x + rx) + " " + y; // SVG 2 allows dropping last coord pair before closePath
+      d += "Z";
+      
+      return d;
     },
-    forcePath = function(p){ // forcePath for glyph elements
-      if (p.tagName === 'glyph') { // perhaps we can also change other SVG tags in the future
-        var c = createPath(p); p.parentNode.appendChild(c); return c;
-      }
-      return p;
-    },
-    clone = function(a) {
-      var copy;
-      if (a instanceof Array) {
-        copy = [];
-        for (var i = 0, len = a.length; i < len; i++) {
-          copy[i] = clone(a[i]);
-        }
-        return copy;
-      }
-      return a;
-    },
-    getPath = function(e){ // get path d attribute or create a path from string value
-      var p = {}, el = typeof e === 'object' ? e : /^\.|^\#/.test(e) ? document.querySelector(e) : null;
-      if ( el && /path|glyph/.test(el.tagName) ) {
-        p.e = forcePath(el);
-        p.o = el.getAttribute('d');
+    replaceWithPath = function(e, d) {
+      // get a fresh path with d in an attribute
+      var np = createPath(d), a, al, id;
 
-      } else if (!el && /[a-z][^a-z]*/ig.test(e)) { // maybe it's a string path already
-        p.e = createPath(e.trim());
-        p.o = e;
+      // replace source object
+      if (e) {
+        // copy relevant existing attributes
+        a = e.attributes;
+        if (a && (al = a.length))
+          for (var i = 0; i < al; i++)
+            if (!/r?[xy]|^width$|^height$/.test(a[i].name))
+              np.setAttribute(a[i].name, a[i].value);
+        
+        // modify id
+        id = e.id; e.id = "replaced-" + id; np.id = id;
+
+        // replace
+        e.parentNode.replaceChild(np, e);
       }
+      return np;
+    },
+    createPath = function(d) { // create a floating path with an optional pathString attribute
+      var p = document.createElementNS(ns, "path");
+      if (d)
+        p.setAttribute("d", d);
       return p;
     },
-    computePathCross = function(s,e){ // pathCross
-      var s1, e1, pointsArray, largerPathLength, smallerPath, largerPath, simulatedSmallerPath, nsm = [], sml, len, tl, cs,
-        index = this.options.morphIndex;
+    ensurePath = function(e) { // no-op for path elements, others get converted
+      switch (e.tagName) {
+      case "path":
+        return e;
+//      case "glyph": // XXX in original implementation; investigate
+//        return replaceWithPath(e);
+      case "rect":
+        return replaceWithPath(e, pathStringFromRect(e));
+      }
+      return null;
+    },
+    getPath = function(v) { // build internal path object from selector, pathString, or this.element
+      var p = {}, el, replaced;
+      
+      // if we got a parameter, it might be one of two things:
+      if (v) {
+        if (/^[.#]/.test(v)) // looks like a selector
+          el = document.querySelector(v);
+        else if (/^.\s*[Mm]/.test(v)) // looks like a pathString
+          el = createPath(v);
+        // XXX: else log a warning - weird getPath attempt
+        else
+          console.log("getPath confused about '" + v + "'");
+      }
+      
+      if (!el) { // still nothing, so this is about this.element
+        el = this.element;
+        if (replaced = /^replaced-(.*)$/.exec(el.id)) { // already replaced
+          el = document.getElementById(replaced[1]);
+          this.element = el;
+        }
+      }
+      
+      if (el) { // turn anything we know how to into a path
+        if ((p.e = ensurePath(el))
+            && (p.o = p.e.getAttribute("d"))) {
+          if (el === this.element && p.e !== el) // we had a non-path target element
+            this.element = p.e;
+          return p;
+        }
+      }
+
+      // XXX: error handling
+      console.log("getPath got '" + v + "' and " + el + ", and that made no sense.");
+      return null;
+    },
+    centerOfGravity = function (points) {
+      var cog = [0, 0], l = points.length, i;
+      for (i = 0; i < l; i++) {
+        cog[0] += points[i][0];
+        cog[1] += points[i][1];
+      }
+      cog[0] /= l;
+      cog[1] /= l;
+      return cog;
+    },
+    phi = function(point, cog) {
+      var v = [point[0] - cog[0], point[1] - cog[1]],
+          phiRad = Math.atan2(v[1], v[0]); // note reversed x and y on atan2
+      return phiRad / Math.PI; // normalize to [-1..1]
+    },
+    alignOrientation = function (start, end, impliedRotation) {
+      var impRot = (impliedRotation && (impliedRotation % 180) || 0) / 180,
+      startCog = centerOfGravity(start),
+      endCog = centerOfGravity(end),
+      startPhi = phi(start[0], startCog),
+//      endPhi = phi(end[0], endCog),
+      l = end.length, i, d, bi, bd = 2;
+      
+      // find smallest orientation difference
+      for (i = 0; i < l; i++) {
+        d = Math.abs(phi(end[i], endCog) - startPhi - impRot);
+        if (d < bd) {
+          bd = d; bi = i;
+        }
+      }
+      
+      if (bi != 0) // unless alignment was OK, shift start vertex
+        end = end.splice(bi).concat(end.splice(0, bi));
+
+//      console.log("ir was: " + (endPhi - startPhi)*180 + " anticipated: " + impRot * 180 + " now: " + (phi(end[0], endCog) - startPhi)*180);
+      return end;
+    },
+    computePathCross = function(s,e) { // pathCross
+      var s1, e1, segments, index = this.options.morphIndex, impRot = this.options.impliedRotation;
 
       if (!this._isPolygon) {
         s = createPath(s); e = createPath(e);
-        pointsArray = getSegments(s,e,this.options.morphPrecision);
-        s1 = pointsArray[0]; e1 = pointsArray[1]; largerPathLength = e1.length;
-      } else {
-        s = pathToAbsolute(s); e = pathToAbsolute(e);
-
-        if ( s.length !== e.length ){
-          largerPathLength = Math.max(s.length,e.length);
-          if ( largerPathLength === e.length) { smallerPath = s; largerPath = e; } else { smallerPath = e; largerPath = s; }
-          sml = smallerPath.length;
-
-          simulatedSmallerPath = createPath('M'+smallerPath.join('L')+'z'); len = simulatedSmallerPath.getTotalLength() / largerPathLength;
-          for (var i=0; i<largerPathLength; i++){
-            tl = simulatedSmallerPath.getPointAtLength(len*i);
-            cs = getClosestPoint(len,tl,smallerPath);
-            nsm.push( [ cs[0], cs[1] ] );
-          }
-
-          if (largerPathLength === e.length) { e1 = largerPath; s1 = nsm; } else { s1 = largerPath; e1 = nsm; }
-        } else {
-          s1 = s; e1 = e;
-        }
+        segments = getSegments(s,e,this.options.morphPrecision);
+        s1 = segments[0]; e1 = segments[1];
+      }
+      else {
+        s1 = s = pathToAbsolute(s); e1 = e = pathToAbsolute(e);
+        if (s.length < e.length)
+          s1 = expandToNSamples(s, e.length, expandTools.dup);
+        else if (s.length > e.length)
+          e1 = expandToNSamples(e, s.length, expandTools.onlydup);
       }
 
-      // reverse arrays
-      if (this.options.reverseFirstPath) { s1.reverse(); }
-      if (this.options.reverseSecondPath) { e1.reverse(); }
+//      // reverse arrays
+//      if (this.options.reverseFirstPath) { s1.reverse(); }
+//      if (this.options.reverseSecondPath) { e1.reverse(); }
+//
+//      // shift second array to for smallest tween distance
+//      if (index) {
+//        var e11 = e1.splice(index, e1.length-index);
+//        e1 = e11.concat(e1);
+//      }
+      
+      e1 = alignOrientation(s1, e1, impRot);
 
-      // shift second array to for smallest tween distance
-      if (index) {
-        var e11 = e1.splice(index,largerPathLength-index);
-        e1 = e11.concat(e1);
-      }
-
-      s = e = null;
-      return [s1,e1]
+      s = e = null; // XXX investigate
+      return [s1, e1]
     };
 
   // set default morphPrecision since 1.6.1
   defaultOptions.morphPrecision = 15;
+  defaultOptions.impliedRotation = 0;
 
   // process path object and also register the render function
-  parseProperty.path = function(o,v) {
+  parseProperty.path = function(o, v) {
     if (!('path' in DOM)) {
       DOM.path = function(l,p,a,b,v){
         l.setAttribute("d", v === 1 ? b.o : coords( a['d'],b['d'],b['d'].length,v ) );
       }
     }
-    return getPath(v);
+    return getPath.call(this, v);
   };
 
   prepareStart.path = function(p){
@@ -301,6 +426,7 @@
 
     // path tween options
     this.options.morphPrecision = this.options && 'morphPrecision' in this.options ? parseInt(this.options.morphPrecision) : defaultOptions.morphPrecision;
+    this.options.impliedRotation = this.options && 'impliedRotation' in this.options ? parseInt(this.options.impliedRotation) : defaultOptions.impliedRotation;
     this._isPolygon = !/[CSQTA]/i.test(p1) && !/[CSQTA]/i.test(p2); // check if both shapes are polygons
 
     // begin processing paths
