@@ -249,7 +249,7 @@
           else if (rx > 0 && isNaN(ry)) ry = rx;
           else if (ry > 0 && isNaN(rx)) rx = ry;
           if (rx > width / 2) rx = width / 2;      
-          if (ry > height / 2) rx = height / 2;
+          if (ry > height / 2) ry = height / 2;
 
           d += "M" + (x + rx) + " " + y;
           d += "H" + (x + width - rx);
