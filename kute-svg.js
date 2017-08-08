@@ -34,8 +34,9 @@
   var pathRegs = {
       minimalQualifier : /^\s*m/i,
       fullQualifier    : /^\s*m(?:(?:\s*[mlhv]\s*)|(?:\s*(?:[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(?:,(?=\s*[-+.\d]))?))+z\s*$/i,
-      stickyTokenizer   : /(?:\s*([mlhvz])\s*)|(?:\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(?:,(?=\s*[-+.\d]))?)/iy,
-      pedanticTokenizer : /(?:\s*([mlhvz])\s*)|(?:\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(?:,(?=\s*[-+.\d]))?)|((?:[^-+\d.emlhvz]|[-+](?!\.?\d)|\.(?!\d)|e)+)/gi,
+      polyPointsTokenizer : /(?:[\s,]*((?:[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?(?:(?:\s+,?\s*)|(?:,\s*)|$)){2}))/g,
+      stickyTokenizer     : /(?:\s*([mlhvz])\s*)|(?:\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(?:,(?=\s*[-+.\d]))?)/iy,
+      pedanticTokenizer   : /(?:\s*([mlhvz])\s*)|(?:\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(?:,(?=\s*[-+.\d]))?)|((?:[^-+\d.emlhvz]|[-+](?!\.?\d)|\.(?!\d)|e)+)/gi,
   },
   defaultQualifier = pathRegs.minimalQualifier,
   defaultTokenizer = isIE ? pathRegs.pedanticTokenizer : pathRegs.stickyTokenizer,
@@ -49,8 +50,7 @@
     function(v) { return Math.round(v * 10) / 10; },
     function(v) { return Math.round(v * 100) / 100; }, ],
   coordPrecision = isMobile ? trunc[0] : round[1], // use truncation on mobile, subpixel rounding on desktop
-  // function(array1, array2, length, progress) for SVG morph
-  coords = g.Interpolate.coords = function(a,b,l,v) {
+  coords = g.Interpolate.coords = function(a, b, l, v) { // sa, sa, al, [0..1] -> ps | interpolation function for path data
     var d = "M", ai, ai0, ai1, bi, bd0, bd1, cp = coordPrecision;
     for (var i = 0; i < l; i++) {
       ai = a[i]; bi = b[i];
@@ -65,14 +65,14 @@
 
 
   // SVG MORPH
-  var getSegments = function(a, b, minPrec) { // uniformly sample max(len(a), len(b))/minPrec coordinates in ccw winding
+  var getSamples = function(a, b, minPrec) { // pe, pe, lp -> saa[2] | uniformly sample max(len(a), len(b))/minPrec points in ccw winding
       var al = a.getTotalLength(), bl = b.getTotalLength(),
-        ll = (al > bl) ? al : bl, sl = (al > bl) ? bl : al,
-        l  = (al > bl) ? a : b,   s  = (al > bl) ? b : a,
-        lPrec = minPrec,          sPrec = lPrec * sl / ll,
+        ll    = (al > bl) ? al : bl, sl    = (al > bl) ? bl : al,
+        l     = (al > bl) ? a : b,   s     = (al > bl) ? b : a,
+        lPrec = minPrec,             sPrec = lPrec * sl / ll,
         steps = trunc[0](ll / lPrec);
       
-      var handlePath = function(path, prec) {
+      var handlePathElement = function(path, prec) { // pe, lp -> sa | sampling for one path element
         var curr, w, i, p, coords = new Array(steps);
         for (i = curr = w = 0; i < steps; i++, curr += prec) {
           // sample point
@@ -92,8 +92,8 @@
       };
 
       return (al > bl)
-        ? [ handlePath(l, lPrec), handlePath(s, sPrec) ]
-        : [ handlePath(s, sPrec), handlePath(l, lPrec) ];
+        ? [ handlePathElement(l, lPrec), handlePathElement(s, sPrec) ]
+        : [ handlePathElement(s, sPrec), handlePathElement(l, lPrec) ];
     },
     expandTools = {
         dup : 1,
@@ -106,11 +106,11 @@
         dwrap : function(arr, ind) { return expandTools.dist(expandTools.prev(arr, ind), arr[ind]) + expandTools.dist(arr[ind], expandTools.next(arr, ind)); },
         dnext : function(arr, ind) { return expandTools.dist(arr[ind], expandTools.next(arr, ind)); },
     },
-    expandToNSamples = function(s, n, mode) { // generates n - s.length additional samples by a combination of methods. needs optimization!
+    expandToNSamples = function(s, n, mode) { // sa, al, ... -> sa | generates n - s.length additional samples by a combination of methods. needs optimization!
       var l, r, m, ns, ord, prio, i, o, curr, next, et = expandTools, mode = mode || et.dup; 
 
       while (n > (l = s.length)) {
-        r = n - l;           // remaining samples to generate
+        r = n - l;        // remaining samples to generate
         m = (r < l) ? r : l; // max samples from this pass (split mode may reduce this)
         switch (mode) {
         // duplicate vertices
@@ -124,16 +124,16 @@
           }
           ns = new Array(l + m);
           for (i = 0, o = 0; i < l; i++) {
-            ns[o++] = curr = s[i];      // copy every time
-            if (r >= l || prio[i] < r)  // duplicate if needed
+            ns[o++] = curr = s[i];     // copy every time
+            if (r >= l || prio[i] < r) // duplicate if needed
               ns[o++] = curr;
           }
           break;
-        // split edges
+        // split segments
         case et.split:
           mode = et.dup;
         case et.onlysplit:
-          // always set priorities by distance to next point to avoid splitting between duplicates
+          // always set priorities by distance to next point to avoid splitting 0-length segments
           ord = new Array(l); for (i = 0; i < l; i++) ord[i] = i;
           ord.sort(function(l, r) { return et.dnext(s, r) - et.dnext(s, l); });
           prio = []; for (i = 0, m = 0; i < l; i++) if (et.dnext(s, ord[i]) > 0) { prio[ord[i]] = i; m++; }
@@ -151,7 +151,7 @@
       }
       return s;
     },
-    pathToAbsolute = function(p) { // converts polygon paths to absolute coordinates in ccw winding
+    pathStringToVertices = function(p) { // ps -> va | converts polygonal path string to vertex array in ccw winding
       var np = [], cc = [0, 0], lc, fc, t0, t1, e = 0, w = 0, f,
           qre = defaultQualifier,
           tre = defaultTokenizer;
@@ -176,7 +176,7 @@
           case "V":           e = 3; break;  // y absolute
           case "v":           e = 4; break;  // y relative
           case "z": case "Z": break parse;   // end of path
-          default: break parse; // error: not a command
+          default: e = -1; break parse; // error: not a command
           }
 
           // handle arguments
@@ -226,115 +226,153 @@
       }
       
       // XXX error handling should go here
+      if (f)
+        console.log("pathStringToVertices confused: missing or malformed argument: " + p);
+      else if (e === 0)
+        console.log("pathStringToVertices confused: input does not look like a path: " + p);
+      else if (e === -1)
+        console.log("pathStringToVertices confused: path contains invalid command: " + p);
       return np;
     },
-    getOnePath = function(p){ return p.split(/z/i).shift() + 'z'; }, // we only tween first path only
-    pathStringFromRect = function(e) { // build a path string from the attributes of a rect object (XXX verify units)
-      var x = parseFloat(e.getAttribute("x")),
-          y = parseFloat(e.getAttribute("y")),
-          width = parseFloat(e.getAttribute("width")),
-          height = parseFloat(e.getAttribute("height")),
-          rx = parseFloat(e.getAttribute("rx")),
-          ry = parseFloat(e.getAttribute("ry")),
-          d = "M";
-      
-      if (isNaN(rx) && isNaN(ry)) rx = ry = 0;
-      else if (rx > 0 && isNaN(ry)) ry = rx;
-      else if (ry > 0 && isNaN(rx)) rx = ry;
-      if (rx > width / 2) rx = width / 2;      
-      if (ry > height / 2) rx = height / 2;
-      
-      d += (x + rx) + " " + y;
-      d += "H" + (x + width - rx);
-      if (rx * ry > 0)
-        d += "A" + rx + " " + ry +" 0 0 1 " + (x + width) + " " + (y + ry); 
-      d += "V" + (y + height - ry);
-      if (rx * ry > 0)
-        d += "A" + rx + " " + ry +" 0 0 1 " + (x + width - rx) + " " + (y + height); 
-      d += "H" + (x + rx);
-      if (rx * ry > 0)
-        d += "A" + rx + " " + ry +" 0 0 1 " + x + " " + (y + height - ry); 
-      d += "V" + (y + ry);
-      if (rx * ry > 0)
-        d += "A" + rx + " " + ry +" 0 0 1 " + (x + rx) + " " + y; // SVG 2 allows dropping last coord pair before closePath
-      d += "Z";
-      
-      return d;
-    },
-    replaceWithPath = function(e, d) {
-      // get a fresh path with d in an attribute
-      var np = createPath(d), a, al, id;
+    getOnePath = function(p) { return p.split(/z/i).shift() + 'z'; }, // ps -> ps | cut path string after first closePath command
+    pathStringFrom = { // se (tagname) -> ps | return a new path string from the attributes of a <tagname> element
+        rect : function(e) { // FIXME units
+          var x = parseFloat(e.getAttribute("x")),
+              y = parseFloat(e.getAttribute("y")),
+              width = parseFloat(e.getAttribute("width")),
+              height = parseFloat(e.getAttribute("height")),
+              rx = parseFloat(e.getAttribute("rx")),
+              ry = parseFloat(e.getAttribute("ry")),
+              d = "";
 
-      // replace source object
-      if (e) {
-        // copy relevant existing attributes
-        a = e.attributes;
-        if (a && (al = a.length))
-          for (var i = 0; i < al; i++)
-            if (!/r?[xy]|^width$|^height$/.test(a[i].name))
-              np.setAttribute(a[i].name, a[i].value);
-        
-        // modify id
-        id = e.id; e.id = "replaced-" + id; np.id = id;
+          if (isNaN(rx) && isNaN(ry)) rx = ry = 0;
+          else if (rx > 0 && isNaN(ry)) ry = rx;
+          else if (ry > 0 && isNaN(rx)) rx = ry;
+          if (rx > width / 2) rx = width / 2;      
+          if (ry > height / 2) rx = height / 2;
 
-        // replace
-        e.parentNode.replaceChild(np, e);
-      }
-      return np;
+          d += "M" + (x + rx) + " " + y;
+          d += "H" + (x + width - rx);
+          if (rx * ry > 0) d += "A" + rx + " " + ry + " 0 0 1 " + (x + width) + " " + (y + ry); 
+          d += "V" + (y + height - ry);
+          if (rx * ry > 0) d += "A" + rx + " " + ry + " 0 0 1 " + (x + width - rx) + " " + (y + height); 
+          d += "H" + (x + rx);
+          if (rx * ry > 0) d += "A" + rx + " " + ry + " 0 0 1 " + x + " " + (y + height - ry); 
+          d += "V" + (y + ry);
+          if (rx * ry > 0) d += "A" + rx + " " + ry + " 0 0 1 " + (x + rx) + " " + y; // SVG 2 allows dropping last coord pair before closePath
+          d += "Z";
+
+          return d;
+        },
+        circle : function(e) { // FIXME units
+          var cx = parseFloat(e.getAttribute("cx")),
+              cy = parseFloat(e.getAttribute("cy")),
+              r = parseFloat(e.getAttribute("r")),
+              d = "";
+
+          d += "M" + (cx + r) + " " + cy;
+          d += "A" + r + " " + r + " 0 0 1 " + cx + " " + (cy + r); // SVG spec demands 0 for sweep flag, but that makes no sense 
+          d += "A" + r + " " + r + " 0 0 1 " + (cx - r) + " " + cy; 
+          d += "A" + r + " " + r + " 0 0 1 " + cx + " " + (cy - r); 
+          d += "A" + r + " " + r + " 0 0 1 " + (cx + r) + " " + cy; // SVG 2 allows dropping last coord pair before closePath 
+          d += "Z";
+
+          return d;
+        },
+        ellipse : function(e) { // FIXME units
+          var cx = parseFloat(e.getAttribute("cx")),
+              cy = parseFloat(e.getAttribute("cy")),
+              rx = parseFloat(e.getAttribute("rx")),
+              ry = parseFloat(e.getAttribute("ry")),
+              d = "";
+
+          d += "M" + (cx + rx) + " " + cy;
+          d += "A" + rx + " " + ry + " 0 0 1 " + cx + " " + (cy + ry); // SVG spec demands 0 for sweep flag, but that makes no sense
+          d += "A" + rx + " " + ry + " 0 0 1 " + (cx - rx) + " " + cy; 
+          d += "A" + rx + " " + ry + " 0 0 1 " + cx + " " + (cy - ry); 
+          d += "A" + rx + " " + ry + " 0 0 1 " + (cx + rx) + " " + cy; // SVG 2 allows dropping last coord pair before closePath 
+          d += "Z";
+
+          return d;
+        },
+        polygon : function(e) {
+          var points = e.getAttribute("points"),
+              coords, d = "";
+
+          if (!points || /none/.test(points)) return d;
+
+          d += "M";
+          while ((coords = pathRegs.polyPointsTokenizer.exec(points))) {
+            // polyPointsTokenizer matches number pairs, separated by whitespace and commas;
+            // if there's an odd number of numbers, the last is ignored (complies with SVG spec)
+            d += coords[1];
+            d += " ";
+          }
+          d += "Z";
+          return d;
+        },
     },
-    createPath = function(d) { // create a floating path with an optional pathString attribute
+    replaceWithPathElement = function(es, ep) { // se, pe -> pe (side-effects DOM) | replace non-path svgElement with svgPathElement
+      var a, al, id;
+
+      // copy non-geometry properties/attributes
+      a = es.attributes;
+      if (a && (al = a.length))
+        for (var i = 0; i < al; i++)
+          if (!/^(?:r?[xy]?|c[xy]|[xy][12]|width|height|points)$/.test(a[i].name))
+            ep.setAttribute(a[i].name, a[i].value);
+
+      // create/modify id
+      if (!(id = es.id))
+        id = "kutegen-" + ((Math.random() * 100000 + 99999) >> 0);
+      es.id = "kuterep-" + id; ep.id = id;
+
+      // replace
+      es.parentNode.replaceChild(ep, es);
+
+      return ep;
+    },
+    createPathElement = function(d) { // ps -> pe | create a naked path element with the given path string
       var p = document.createElementNS(ns, "path");
-      if (d)
-        p.setAttribute("d", d);
+      p.setAttribute("d", d);
       return p;
     },
-    ensurePath = function(e) { // no-op for path elements, others get converted
+    ensurePathElement = function(e) { // se -> pe_OR_null | no-op for path elements, others get converted
       switch (e.tagName) {
       case "path":
         return e;
-//      case "glyph": // XXX in original implementation; investigate
-//        return replaceWithPath(e);
-      case "rect":
-        return replaceWithPath(e, pathStringFromRect(e));
+      case "glyph": // glyphs have path strings in "d"
+        return createPathElement(e.getAttribute("d"));
+      default:
+        var psFrom = pathStringFrom[e.tagName];
+        if (psFrom)
+          return createPathElement(psFrom(e));
       }
+      // XXX error handling
+      console.log("cannot convert " + e.tagName + " to path element");
       return null;
     },
-    getPath = function(v) { // build internal path object from selector, pathString, or this.element
-      var p = {}, el, replaced;
+    getPathObject = function(v) { // s_OR_ps -> po | return new path object from selector or path string
+      var p = {}, el;
       
-      // if we got a parameter, it might be one of two things:
       if (v) {
         if (/^[.#]/.test(v)) // looks like a selector
           el = document.querySelector(v);
-        else if (/^.\s*[Mm]/.test(v)) // looks like a pathString
-          el = createPath(v);
-        // XXX: else log a warning - weird getPath attempt
-        else
-          console.log("getPath confused about '" + v + "'");
+        else if (pathRegs.minimalQualifier.test(v)) // looks like a path string
+          el = createPathElement(v);
       }
       
-      if (!el) { // still nothing, so this is about this.element
-        el = this.element;
-        if (replaced = /^replaced-(.*)$/.exec(el.id)) { // already replaced
-          el = document.getElementById(replaced[1]);
-          this.element = el;
-        }
-      }
-      
-      if (el) { // turn anything we know how to into a path
-        if ((p.e = ensurePath(el))
+      if (el) { // turn anything we know how to into a path element and build a path object from it
+        if ((p.e = ensurePathElement(el))
             && (p.o = p.e.getAttribute("d"))) {
-          if (el === this.element && p.e !== el) // we had a non-path target element
-            this.element = p.e;
           return p;
         }
       }
-
       // XXX: error handling
-      console.log("getPath got '" + v + "' and " + el + ", and that made no sense.");
+      console.log("getPath got '" + v + "', found " + el);
       return null;
     },
-    centerOfGravity = function (points) {
+    centerOfGravity = function (points) { // pa -> p | point at center of gravity of an array of points
       var cog = [0, 0], l = points.length, i;
       for (i = 0; i < l; i++) {
         cog[0] += points[i][0];
@@ -344,18 +382,18 @@
       cog[1] /= l;
       return cog;
     },
-    phi = function(point, cog) {
+    phi = function(point, cog) { // angle between vector from cog to point, normalized to [-1..1]
       var v = [point[0] - cog[0], point[1] - cog[1]],
           phiRad = Math.atan2(v[1], v[0]); // note reversed x and y on atan2
       return phiRad / Math.PI; // normalize to [-1..1]
     },
-    alignOrientation = function (start, end, impliedRotation) {
-      var impRot = (impliedRotation && (impliedRotation % 180) || 0) / 180,
+    alignOrientation = function (start, end, impliedRotation) { // pa, pa, n -> pa | returns end, shifted to minimize phi distance of end[0] and start[0], with optional offset
+      var impRot = (impliedRotation % 180) / 180,
       startCog = centerOfGravity(start),
-      endCog = centerOfGravity(end),
+      endCog   = centerOfGravity(end),
       startPhi = phi(start[0], startCog),
-//      endPhi = phi(end[0], endCog),
-      l = end.length, i, d, bi, bd = 2;
+      endPhi = phi(end[0], endCog), // for testing
+      l = end.length, i, d, bi, bd = Infinity;
       
       // find smallest orientation difference
       for (i = 0; i < l; i++) {
@@ -368,57 +406,65 @@
       if (bi != 0) // unless alignment was OK, shift start vertex
         end = end.splice(bi).concat(end.splice(0, bi));
 
-//      console.log("ir was: " + (endPhi - startPhi)*180 + " anticipated: " + impRot * 180 + " now: " + (phi(end[0], endCog) - startPhi)*180);
+      //console.log("ir was: " + (endPhi - startPhi)*180 + " anticipated: " + impRot * 180 + " now: " + (phi(end[0], endCog) - startPhi)*180);
       return end;
     },
-    computePathCross = function(s,e) { // pathCross
-      var s1, e1, segments, index = this.options.morphIndex, impRot = this.options.impliedRotation;
+    computePathCross = function(s, e) { // ps, ps -> saa[2] | compute appropiate sample arrays to morph between path strings s and e
+      var s_pe, e_pe, s_sa, e_sa, tmp_sa, samples,
+        index = this.options.morphIndex, impRot = this.options.impliedRotation;
 
       if (!this._isPolygon) {
-        s = createPath(s); e = createPath(e);
-        segments = getSegments(s,e,this.options.morphPrecision);
-        s1 = segments[0]; e1 = segments[1];
+        s_pe = createPathElement(s); e_pe = createPathElement(e);
+        samples = getSamples(s_pe, e_pe, this.options.morphPrecision);
+        s_sa = samples[0]; e_sa = samples[1];
       }
       else {
-        s1 = s = pathToAbsolute(s); e1 = e = pathToAbsolute(e);
-        if (s.length < e.length)
-          s1 = expandToNSamples(s, e.length, expandTools.dup);
-        else if (s.length > e.length)
-          e1 = expandToNSamples(e, s.length, expandTools.onlydup);
+        s_sa = pathStringToVertices(s); e_sa = pathStringToVertices(e);
+        if (s_sa.length < e_sa.length)
+          s_sa = expandToNSamples(s_sa, e_sa.length, expandTools.dup);
+        else if (s_sa.length > e_sa.length)
+          e_sa = expandToNSamples(e_sa, s_sa.length, expandTools.dup);
       }
 
-//      // reverse arrays
-//      if (this.options.reverseFirstPath) { s1.reverse(); }
-//      if (this.options.reverseSecondPath) { e1.reverse(); }
-//
-//      // shift second array to for smallest tween distance
-//      if (index) {
-//        var e11 = e1.splice(index, e1.length-index);
-//        e1 = e11.concat(e1);
-//      }
-      
-      e1 = alignOrientation(s1, e1, impRot);
+      // reverse arrays
+      if (this.options.reverseFirstPath) { s_sa.reverse(); }
+      if (this.options.reverseSecondPath) { e_sa.reverse(); }
 
-      s = e = null; // XXX investigate
-      return [s1, e1]
+      // shift second array to for smallest tween distance
+      if (index) {
+        var tmp_sa = e_sa.splice(index, e_sa.length-index);
+        e_sa = tmp_sa.concat(e_sa);
+      }
+      else { // automatic rotation
+        e_sa = alignOrientation(s_sa, e_sa, impRot || 0);
+      }
+
+      return [s_sa, e_sa]
     };
 
   // set default morphPrecision since 1.6.1
   defaultOptions.morphPrecision = 15;
-  defaultOptions.impliedRotation = 0;
 
-  // process path object and also register the render function
-  parseProperty.path = function(o, v) {
+  parseProperty.path = function(o, v) { // const 'path', s_OR_ps -> po + side effects | build path object; also, verify/fix type of this.element and register the render function 
+    // test eligibility for path morphing
+    var e = ensurePathElement(this.element); // can we handle this?
+    if (!e) return null;                     // - no, we can't
+    if (e !== this.element)                  // - yes, with a conversion.
+      this.element = replaceWithPathElement(this.element, e);
+    
+    // register render function
     if (!('path' in DOM)) {
-      DOM.path = function(l,p,a,b,v){
-        l.setAttribute("d", v === 1 ? b.o : coords( a['d'],b['d'],b['d'].length,v ) );
+      DOM.path = function(l, p, a, b, v) {
+        l.setAttribute("d", v === 1 ? b.o : coords(a.d, b.d, b.d.length, v));
       }
     }
-    return getPath.call(this, v);
+
+    // actually parse the property
+    return getPathObject(v);
   };
 
-  prepareStart.path = function(p){
-    return this.element.getAttribute('d');
+  prepareStart.path = function(p) { // const 'path' -> ps | returns current path string of target element 
+    return this.element.getAttribute('d'); 
   };
 
   crossCheck.path = function() { // unlike other cases, the crossCheck apply to both to() and fromTo() methods
@@ -426,7 +472,6 @@
 
     // path tween options
     this.options.morphPrecision = this.options && 'morphPrecision' in this.options ? parseInt(this.options.morphPrecision) : defaultOptions.morphPrecision;
-    this.options.impliedRotation = this.options && 'impliedRotation' in this.options ? parseInt(this.options.impliedRotation) : defaultOptions.impliedRotation;
     this._isPolygon = !/[CSQTA]/i.test(p1) && !/[CSQTA]/i.test(p2); // check if both shapes are polygons
 
     // begin processing paths
