@@ -50,7 +50,26 @@
     function(v) { return Math.round(v * 10) / 10; },
     function(v) { return Math.round(v * 100) / 100; }, ],
   coordPrecision = isMobile ? trunc[0] : round[1], // use truncation on mobile, subpixel rounding on desktop
-  coords = g.Interpolate.coords = function(a, b, l, v) { // sa, sa, al, [0..1] -> ps | interpolation function for path data
+  coords = function(s, e, v) { // po, po, [0..1] -> ps | interpolation function for path data
+    var d, a, b, l, i, p, ai, ai0, ai1, bi, bd0, bd1, cp = coordPrecision;
+    for (p = 0; p < 1; p++) { // subpath index
+      d = "M";
+      a = s.d;
+      b = e.d;
+      l = b.length;
+      for (i = 0; i < l; i++) { // handle subpath
+        ai = a[i]; bi = b[i];
+        ai0 = ai[0]; bd0 = bi[0] - ai0;
+        ai1 = ai[1]; bd1 = bi[1] - ai1;
+        d += " "; d += cp(ai0 + bd0 * v);
+        d += " "; d += cp(ai1 + bd1 * v);
+      }
+      if (v < 2)
+        d += "z";
+    }
+    return d;
+  },
+  coords_simple = function(a, b, l, v) { // sa, sa, al, [0..1] -> ps | interpolation function for path data (old svg-tweaks version, for performance checks)
     var d = "M", ai, ai0, ai1, bi, bd0, bd1, cp = coordPrecision;
     for (var i = 0; i < l; i++) {
       ai = a[i]; bi = b[i];
@@ -59,10 +78,28 @@
       d += " "; d += cp(ai0 + bd0 * v);
       d += " "; d += cp(ai1 + bd1 * v);
     }
-    d += "Z";
+    d += "z";
     return d;
   };
-
+  g.Interpolate.coords = isMobile ? function(a,b,l,v) { // tuned original, for export, since coords is now really specialised
+    var points = new Array(l), ai, ai0, ai1, bi, bd0, bd1, i;
+    for(i=0;i<l;i++) { // for each point
+      ai = a[i]; bi = b[i];
+      ai0 = ai[0]; bd0 = bi[0] - ai0;
+      ai1 = ai[1]; bd1 = bi[1] - ai1;
+      points[i] = [ (ai0 + bd0 * v) >> 0, (ai1 + bd1 * v) >> 0 ];
+    }
+    return points;
+  } : function(a,b,l,v) { // on desktop devices we use subpixel accuracy for morph
+    var points = new Array(l), ai, ai0, ai1, bi, bd0, bd1, i;
+    for(i=0;i<l;i++) { // for each point
+      ai = a[i]; bi = b[i];
+      ai0 = ai[0]; bd0 = bi[0] - ai0;
+      ai1 = ai[1]; bd1 = bi[1] - ai1;
+      points[i] = [ (((ai0 + bd0 * v) * 10) >> 0) / 10, (((ai1 + bd1 * v) * 10) >> 0) / 10 ];
+    }
+    return points;
+  };
 
   // SVG MORPH
   var getSamples = function(a, b, minPrec) { // pe, pe, lp -> saa[2] | uniformly sample max(len(a), len(b))/minPrec points in ccw winding
@@ -157,7 +194,7 @@
           tre = defaultTokenizer;
       var nextToken = function() {
         var m = tre.exec(p);
-        if (!m) return m;                  // no match
+        if (!m) { p = null; return m; }    // no match
         if (m[1]) return m[1];             // command
         if (m[2]) return parseFloat(m[2]); // number
         if (m[3]) return m[3];             // invalid (pedanticTokenizer only)
@@ -234,7 +271,6 @@
         console.log("pathStringToVertices confused: path contains invalid command: " + p);
       return np;
     },
-    getOnePath = function(p) { return p.split(/z/i).shift() + 'z'; }, // ps -> ps | cut path string after first closePath command
     pathStringFrom = { // se (tagname) -> ps | return a new path string from the attributes of a <tagname> element
         rect : function(e) { // FIXME units
           var x = parseFloat(e.getAttribute("x")),
@@ -246,8 +282,8 @@
               d = "";
 
           if (isNaN(rx) && isNaN(ry)) rx = ry = 0;
-          else if (rx > 0 && isNaN(ry)) ry = rx;
-          else if (ry > 0 && isNaN(rx)) rx = ry;
+          else if (rx >= 0 && isNaN(ry)) ry = rx;
+          else if (ry >= 0 && isNaN(rx)) rx = ry;
           if (rx > width / 2) rx = width / 2;      
           if (ry > height / 2) ry = height / 2;
 
@@ -260,7 +296,7 @@
           if (rx * ry > 0) d += "A" + rx + " " + ry + " 0 0 1 " + x + " " + (y + height - ry); 
           d += "V" + (y + ry);
           if (rx * ry > 0) d += "A" + rx + " " + ry + " 0 0 1 " + (x + rx) + " " + y; // SVG 2 allows dropping last coord pair before closePath
-          d += "Z";
+          d += "z";
 
           return d;
         },
@@ -275,7 +311,7 @@
           d += "A" + r + " " + r + " 0 0 1 " + (cx - r) + " " + cy; 
           d += "A" + r + " " + r + " 0 0 1 " + cx + " " + (cy - r); 
           d += "A" + r + " " + r + " 0 0 1 " + (cx + r) + " " + cy; // SVG 2 allows dropping last coord pair before closePath 
-          d += "Z";
+          d += "z";
 
           return d;
         },
@@ -291,8 +327,34 @@
           d += "A" + rx + " " + ry + " 0 0 1 " + (cx - rx) + " " + cy; 
           d += "A" + rx + " " + ry + " 0 0 1 " + cx + " " + (cy - ry); 
           d += "A" + rx + " " + ry + " 0 0 1 " + (cx + rx) + " " + cy; // SVG 2 allows dropping last coord pair before closePath 
-          d += "Z";
+          d += "z";
 
+          return d;
+        },
+        line: function(e) { // FIXME units
+          var x1 = parseFloat(e.getAttribute("x1")),
+              y1 = parseFloat(e.getAttribute("y1")),
+              x2 = parseFloat(e.getAttribute("x2")),
+              y2 = parseFloat(e.getAttribute("y2")),
+              d = "";
+       
+          d += "M" + x1 + " " + y1 + " " + x2 + " " + y2;
+          
+          return d;
+        },
+        polyline : function(e) {
+          var points = e.getAttribute("points"),
+              coords, d = "";
+
+          if (!points || /none/.test(points)) return d;
+
+          d += "M";
+          while ((coords = pathRegs.polyPointsTokenizer.exec(points))) {
+            // polyPointsTokenizer matches number pairs, separated by whitespace and commas;
+            // if there's an odd number of numbers, the last is ignored (complies with SVG spec)
+            d += coords[1];
+            d += " ";
+          }
           return d;
         },
         polygon : function(e) {
@@ -308,11 +370,11 @@
             d += coords[1];
             d += " ";
           }
-          d += "Z";
+          d += "z";
           return d;
         },
     },
-    replaceWithPathElement = function(es, ep) { // se, pe -> pe (side-effects DOM) | replace non-path svgElement with svgPathElement
+    replaceWithPathElement = function(es, ep) { // se, pe -> pe + (DOM side-effects) | replace non-path svgElement with svgPathElement
       var a, al, id;
 
       // copy non-geometry properties/attributes
@@ -337,7 +399,7 @@
       p.setAttribute("d", d);
       return p;
     },
-    ensurePathElement = function(e) { // se -> pe_OR_null | no-op for path elements, others get converted
+    ensurePathElement = function(e) { // se -> pe_OR_null | no-op for path elements, others get converted if possible
       switch (e.tagName) {
       case "path":
         return e;
@@ -352,7 +414,7 @@
       console.log("cannot convert " + e.tagName + " to path element");
       return null;
     },
-    getPathObject = function(v) { // s_OR_ps -> po | return new path object from selector or path string
+    createPathObject = function(v) { // s_OR_ps -> po | return new path object from selector or path string
       var p = {}, el;
       
       if (v) {
@@ -369,7 +431,7 @@
         }
       }
       // XXX: error handling
-      console.log("getPath got '" + v + "', found " + el);
+      console.log("createPathObject got '" + v + "', found " + el);
       return null;
     },
     centerOfGravity = function (points) { // pa -> p | point at center of gravity of an array of points
@@ -409,17 +471,21 @@
       //console.log("ir was: " + (endPhi - startPhi)*180 + " anticipated: " + impRot * 180 + " now: " + (phi(end[0], endCog) - startPhi)*180);
       return end;
     },
-    computePathCross = function(s, e) { // ps, ps -> saa[2] | compute appropiate sample arrays to morph between path strings s and e
-      var s_pe, e_pe, s_sa, e_sa, tmp_sa, samples,
+    computePathCross = function(s, e) { // po, po -> updated po, po | update sample arrays to morph between path objects s and e
+      var s_sa, e_sa, tmp_sa, samples,
         index = this.options.morphIndex, impRot = this.options.impliedRotation;
 
+      // if the shape of the end element changed after it was parsed, get a new instance
+      // not doing this will mess up sampling on to()-tweens that have their target as their end state
+      if (e.e === this.element && e.e.getAttribute("d") !== e.o)
+        e.e = createPathElement(e.o);
+
       if (!this._isPolygon) {
-        s_pe = createPathElement(s); e_pe = createPathElement(e);
-        samples = getSamples(s_pe, e_pe, this.options.morphPrecision);
+        samples = getSamples(s.e, e.e, this.options.morphPrecision);
         s_sa = samples[0]; e_sa = samples[1];
       }
       else {
-        s_sa = pathStringToVertices(s); e_sa = pathStringToVertices(e);
+        s_sa = pathStringToVertices(s.o); e_sa = pathStringToVertices(e.o);
         if (s_sa.length < e_sa.length)
           s_sa = expandToNSamples(s_sa, e_sa.length, expandTools.dup);
         else if (s_sa.length > e_sa.length)
@@ -439,7 +505,8 @@
         e_sa = alignOrientation(s_sa, e_sa, impRot || 0);
       }
 
-      return [s_sa, e_sa]
+      s.d = s_sa;
+      e.d = e_sa;
     };
 
   // set default morphPrecision since 1.6.1
@@ -455,12 +522,13 @@
     // register render function
     if (!('path' in DOM)) {
       DOM.path = function(l, p, a, b, v) {
-        l.setAttribute("d", v === 1 ? b.o : coords(a.d, b.d, b.d.length, v));
+        l.setAttribute("d", v === 1 ? b.o : coords(a, b, v));
+        //l.setAttribute("d", v === 1 ? b.o : coords_simple(a.d, b.d, b.d.length, v)); // single closed path version
       }
     }
 
     // actually parse the property
-    return getPathObject(v);
+    return createPathObject(v);
   };
 
   prepareStart.path = function(p) { // const 'path' -> ps | returns current path string of target element 
@@ -468,17 +536,14 @@
   };
 
   crossCheck.path = function() { // unlike other cases, the crossCheck apply to both to() and fromTo() methods
-    var p1 = getOnePath(this.valuesStart.path.o), p2 = getOnePath(this.valuesEnd.path.o), paths;
+    var s = this.valuesStart.path, e = this.valuesEnd.path;
 
     // path tween options
     this.options.morphPrecision = this.options && 'morphPrecision' in this.options ? parseInt(this.options.morphPrecision) : defaultOptions.morphPrecision;
-    this._isPolygon = !/[CSQTA]/i.test(p1) && !/[CSQTA]/i.test(p2); // check if both shapes are polygons
+    this._isPolygon = !/[CSQTA]/i.test(s.o) && !/[CSQTA]/i.test(e.o); // check if both shapes are polygons
 
     // begin processing paths
-    paths = computePathCross.apply(this,[p1,p2]);
-
-    this.valuesStart.path.d = paths[0];
-    this.valuesEnd.path.d = paths[1];
+    computePathCross.call(this, s, e);
   };
 
 
