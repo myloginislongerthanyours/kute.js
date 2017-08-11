@@ -31,56 +31,34 @@
   if (isIE&&isIE<9) {return;} // return if SVG API is not supported
 
   // here we go with the plugin
-  var pathRegs = {
-      minimalQualifier : /^\s*m/i,
-      fullQualifier    : /^\s*m(?:(?:\s*[mlhv]\s*)|(?:\s*(?:[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(?:,(?=\s*[-+.\d]))?))+z\s*$/i,
-      polyPointsTokenizer : /(?:[\s,]*((?:[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?(?:(?:\s+,?\s*)|(?:,\s*)|$)){2}))/g,
-      stickyTokenizer     : /(?:\s*([mlhvz])\s*)|(?:\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(?:,(?=\s*[-+.\d]))?)/iy,
-      pedanticTokenizer   : /(?:\s*([mlhvz])\s*)|(?:\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(?:,(?=\s*[-+.\d]))?)|((?:[^-+\d.emlhvz]|[-+](?!\.?\d)|\.(?!\d)|e)+)/gi,
-  },
-  defaultQualifier = pathRegs.minimalQualifier,
-  defaultTokenizer = isIE ? pathRegs.pedanticTokenizer : pathRegs.stickyTokenizer,
-  ns = 'http://www.w3.org/2000/svg',
-  trunc = [ // truncate to 0-2 decimal places
-    function(v) { return v >> 0; },
-    function(v) { return ((v * 10) >> 0) / 10; },
-    function(v) { return ((v * 100) >> 0) / 100; }, ],
-  round = [ // round to 0-2 decimal places
-    function(v) { return Math.round(v); },
-    function(v) { return Math.round(v * 10) / 10; },
-    function(v) { return Math.round(v * 100) / 100; }, ],
-  coordPrecision = isMobile ? trunc[0] : round[1], // use truncation on mobile, subpixel rounding on desktop
-  coords = function(s, e, v) { // po, po, [0..1] -> ps | interpolation function for path data
-    var d, a, b, l, i, p, ai, ai0, ai1, bi, bd0, bd1, cp = coordPrecision;
-    for (p = 0; p < 1; p++) { // subpath index
-      d = "M";
-      a = s.d;
-      b = e.d;
-      l = b.length;
-      for (i = 0; i < l; i++) { // handle subpath
-        ai = a[i]; bi = b[i];
-        ai0 = ai[0]; bd0 = bi[0] - ai0;
-        ai1 = ai[1]; bd1 = bi[1] - ai1;
-        d += " "; d += cp(ai0 + bd0 * v);
-        d += " "; d += cp(ai1 + bd1 * v);
+  var ns = 'http://www.w3.org/2000/svg',
+    trunc = [ // truncate to 0-2 decimal places
+      function(v) { return v >> 0; },
+      function(v) { return ((v * 10) >> 0) / 10; },
+      function(v) { return ((v * 100) >> 0) / 100; }, ],
+    round = [ // round to 0-2 decimal places
+      function(v) { return Math.round(v); },
+      function(v) { return Math.round(v * 10) / 10; },
+      function(v) { return Math.round(v * 100) / 100; }, ],
+    coordPrecision = isMobile ? trunc[0] : round[1], // use truncation on mobile, subpixel rounding on desktop
+    coords = function(s, e, v) { // po, po, [0..1] -> ps | interpolation function for path data
+      var d = "", a = s.d, b = e.d, l, i, po, p, pl = e.p.length, ai, bd, cp = coordPrecision;
+      for (p = 0; p < pl; p++) {
+        po = e.p[p];   // subpath object
+        i = po.s;      // index of samples in s.d/e.d
+        l = i + po.l;  // length of samples
+        d += "M";
+        while (i < l) { // handle subpath p
+          ai = a[i]; bd = b[i] - ai; i++; // x
+          d += " "; d += cp(ai + bd * v);
+          ai = a[i]; bd = b[i] - ai; i++; // y
+          d += " "; d += cp(ai + bd * v);
+        }
+        d += po.t[1 * (v >= po.tv)]; // closepath "interpolation" - adds "z" or ""
       }
-      if (v < 2)
-        d += "z";
-    }
-    return d;
-  },
-  coords_simple = function(a, b, l, v) { // sa, sa, al, [0..1] -> ps | interpolation function for path data (old svg-tweaks version, for performance checks)
-    var d = "M", ai, ai0, ai1, bi, bd0, bd1, cp = coordPrecision;
-    for (var i = 0; i < l; i++) {
-      ai = a[i]; bi = b[i];
-      ai0 = ai[0]; bd0 = bi[0] - ai0;
-      ai1 = ai[1]; bd1 = bi[1] - ai1;
-      d += " "; d += cp(ai0 + bd0 * v);
-      d += " "; d += cp(ai1 + bd1 * v);
-    }
-    d += "z";
-    return d;
-  };
+      return d;
+    };
+
   g.Interpolate.coords = isMobile ? function(a,b,l,v) { // tuned original, for export, since coords is now really specialised
     var points = new Array(l), ai, ai0, ai1, bi, bd0, bd1, i;
     for(i=0;i<l;i++) { // for each point
@@ -102,50 +80,27 @@
   };
 
   // SVG MORPH
-  var getSamples = function(a, b, minPrec) { // pe, pe, lp -> saa[2] | uniformly sample max(len(a), len(b))/minPrec points in ccw winding
-      var al = a.getTotalLength(), bl = b.getTotalLength(),
-        ll    = (al > bl) ? al : bl, sl    = (al > bl) ? bl : al,
-        l     = (al > bl) ? a : b,   s     = (al > bl) ? b : a,
-        lPrec = minPrec,             sPrec = lPrec * sl / ll,
-        steps = trunc[0](ll / lPrec);
-      
-      var handlePathElement = function(path, prec) { // pe, lp -> sa | sampling for one path element
-        var curr, w, i, p, coords = new Array(steps);
-        for (i = curr = w = 0; i < steps; i++, curr += prec) {
-          // sample point
-          p = path.getPointAtLength(curr);
-          coords[i] = [ p.x, p.y ];
-          // keep track of winding
-          if (i) w += (coords[i][0] - coords[i-1][0]) * (coords[i][1] + coords[i-1][1]);
-        }
-        // last winding step
-        w += (coords[0][0] - coords[steps-1][0]) * (coords[0][1] + coords[steps-1][1]);
-        if (w > 0) {
-          // if cw, reverse, preserving start point
-          coords.reverse();
-          coords = coords.slice(-1).concat(coords.slice(0, -1));
-        }
-        return coords;
-      };
-
-      return (al > bl)
-        ? [ handlePathElement(l, lPrec), handlePathElement(s, sPrec) ]
-        : [ handlePathElement(s, sPrec), handlePathElement(l, lPrec) ];
+  var morphRegs = {
+      selectorQualifier : /^[.#]/,
+      minimalPathQualifier : /^\s*m/i,
+      fullPathTokenizer : /(?:\s*([acmlhqtsvz])\s*)|(?:\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(?:,(?=\s*[-+.\d]))?)/gi,
+      polyPointsTokenizer : /(?:[\s,]*((?:[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?(?:(?:\s+,?\s*)|(?:,\s*)|$)){2}))/g,
+      geoPropQualifier : /^(?:r?[xy]?|c[xy]|[xy][12]|width|height|points|d)$/,
     },
     expandTools = {
-        dup : 1,
-        onlydup : 2,
-        split: 3,
-        onlysplit : 4,
-        prev : function(arr, ind) { return arr[(ind - 1 + arr.length) % arr.length]; },
-        next : function(arr, ind) { return arr[(ind + 1) % arr.length]; },
-        dist : function(a, b) { var d0 = b[0] - a[0], d1 = b[1] - a[1]; return (d0 === 0 && d1 === 0) ? 0 : Math.sqrt(d0 * d0 + d1 * d1); },
-        dwrap : function(arr, ind) { return expandTools.dist(expandTools.prev(arr, ind), arr[ind]) + expandTools.dist(arr[ind], expandTools.next(arr, ind)); },
-        dnext : function(arr, ind) { return expandTools.dist(arr[ind], expandTools.next(arr, ind)); },
+      dup : 1,
+      onlydup : 2,
+      split: 3,
+      onlysplit : 4,
+      prev : function(arr, ind) { return arr[(ind - 1 + arr.length) % arr.length]; },
+      next : function(arr, ind) { return arr[(ind + 1) % arr.length]; },
+      dist : function(a, b) { var d0 = b[0] - a[0], d1 = b[1] - a[1]; return (d0 === 0 && d1 === 0) ? 0 : Math.sqrt(d0 * d0 + d1 * d1); },
+      dwrap : function(arr, ind) { return expandTools.dist(expandTools.prev(arr, ind), arr[ind]) + expandTools.dist(arr[ind], expandTools.next(arr, ind)); },
+      dnext : function(arr, ind) { return expandTools.dist(arr[ind], expandTools.next(arr, ind)); },
     },
-    expandToNSamples = function(s, n, mode) { // sa, al, ... -> sa | generates n - s.length additional samples by a combination of methods. needs optimization!
+    expandToNSamplesOLD = function(s, n, mode) { // sa, al, ... -> sa | generates n - s.length additional samples by a combination of methods. needs optimization!
       var l, r, m, ns, ord, prio, i, o, curr, next, et = expandTools, mode = mode || et.dup; 
-
+  
       while (n > (l = s.length)) {
         r = n - l;        // remaining samples to generate
         m = (r < l) ? r : l; // max samples from this pass (split mode may reduce this)
@@ -188,88 +143,307 @@
       }
       return s;
     },
-    pathStringToVertices = function(p) { // ps -> va | converts polygonal path string to vertex array in ccw winding
-      var np = [], cc = [0, 0], lc, fc, t0, t1, e = 0, w = 0, f,
-          qre = defaultQualifier,
-          tre = defaultTokenizer;
-      var nextToken = function() {
-        var m = tre.exec(p);
-        if (!m) { p = null; return m; }    // no match
-        if (m[1]) return m[1];             // command
-        if (m[2]) return parseFloat(m[2]); // number
-        if (m[3]) return m[3];             // invalid (pedanticTokenizer only)
-      };
-      tre.lastIndex = 0;
-
-      if (qre.test(p)) { // if p looks like a path...
-        parse: while (t0 || (t0 = nextToken())) {
-
-          // handle command
-          switch (t0) {
-          case "M": case "L": e = 13; break; // x, y absolute
-          case "m": case "l": e = 24; break; // x, y relative
-          case "H":           e = 1; break;  // x absolute
-          case "h":           e = 2; break;  // x relative
-          case "V":           e = 3; break;  // y absolute
-          case "v":           e = 4; break;  // y relative
-          case "z": case "Z": break parse;   // end of path
-          default: e = -1; break parse; // error: not a command
-          }
-
-          // handle arguments
-          f = true;
-          while (typeof (t0 = nextToken()) === "number"
-            && (e < 10
-                || typeof (t1 = nextToken()) === "number"
-                  && e < 100)) {
-            switch (e) {
-            case 1:  cc[0]  = t0; break;
-            case 2:  cc[0] += t0; break;
-            case 3:               cc[1]  = t0; break;
-            case 4:               cc[1] += t0; break;
-            case 13: cc[0]  = t0; cc[1]  = t1; break;
-            case 24: cc[0] += t0; cc[1] += t1; break;
-            }
-
-            // winding - regular term
-            if (lc) w += (cc[0] - lc[0]) * (cc[1] + lc[1]);
-            else fc = cc; // note first point
-
-            // store current coordinate, mark success, iterate
-            np.push(cc); f = false; lc = cc; cc = cc.slice();
-          }
-          if (f) break parse; // error: missing arguments
-        }
+    matchSampleCounts = function(s, ssi, e, esi) { // po, subpath index, po, subpath index -> side effects on shorter (in samples) subpath | duplicates vertices or splits segments
+      var source = s.p[ssi], target = e.p[ssi], plan, smaller, larger, sdiff, vdiff,
+      i, o,
+      et = expandTools;
+      
+      if (source.ss.length < target.ss.length) {
+        smaller = source; larger = target;
+        plan = (source.vs.length < target.vs.length) ? et.split : et.dup;
       }
+      else if (source.ss.length > target.ss.length) {
+        smaller = target; larger = source;
+        plan = (source.vs.length > target.vs.length) ? et.dup : et.split; 
+      }
+      else return; // there's nothing to do.
+      
+      sdiff = (larger.ss.length - smaller.ss.length);
 
-      // winding - last term, and normalization to ccw
-      if (fc) {
-        if (fc[0] === lc[0] && fc[1] === lc[1]) {
-          // explicitly closed, last term is already included
-          np = np.slice(0, -1); // drop duplicated point
-          if (w > 0) { // if cw, reverse, preserving start point
-            np.reverse();
-            np = np.slice(-1).concat(np.slice(0, -1));
+      // HAH
+      plan = et.dup;
+      
+      // simplest possible implementation, to be fixed later.
+      switch (plan) {
+      case et.dup:
+        for (i = 0, o = 0; i < smaller.vs.length; i++) {
+          smaller.vs[i][2] += o;
+          if (i < sdiff) {
+            smaller.ss.splice(smaller.vs[i][2], 0, smaller.ss[smaller.vs[i][2]]);
+            o++
+          }
+          
+          // sanity check:
+          if (!(smaller.vs[i][0] === smaller.ss[smaller.vs[i][2]][0] && smaller.vs[i][1] === smaller.ss[smaller.vs[i][2]][1])) {
+            console.log("dup not working correctly: " + i);
+            return;
           }
         }
-        else {
-          // implicitly closed, add last term to w
-          w += (fc[0] - lc[0]) * (fc[1] + lc[1]);
-          if (w > 0) { // if cw, reverse, preserving start point
-            np.reverse();
-            np = np.slice(-1).concat(np.slice(0, -1));
-          }
-        }
+        // reevaluate
+        matchSampleCounts(s, ssi, e, esi);
+        break;
+      case et.split:
+        break;
       }
       
-      // XXX error handling should go here
-      if (f)
-        console.log("pathStringToVertices confused: missing or malformed argument: " + p);
-      else if (e === 0)
-        console.log("pathStringToVertices confused: input does not look like a path: " + p);
-      else if (e === -1)
-        console.log("pathStringToVertices confused: path contains invalid command: " + p);
-      return np;
+    },
+    createSubpathObjects = function(po, minPrec) { // po, samplePrecision -> (po update) | creates subpath objects on po for all subpaths, using adaptive sampling
+      var input = po.o,
+      MAX_ARGS = 7, N_ACCS = 13, MIN_SEGMENT = 2,
+      ivx, ivy, c, dx, dy, sy, hx, hy, tx, ty,
+      polySegLen, currPolyLen, pathSegLen, currPathLen, samplePE, samplePS, spsp, spsl,
+      accept = [], queue, cand, mid,
+      ct, cc, nc, ca = new Array(MAX_ARGS), cna = 0, tpl, i, is = 0,
+      qre = morphRegs.minimalPathQualifier,
+      tre = morphRegs.fullPathTokenizer;
+      
+      // command properties: c:  normalised command char,
+      //                     t:  type (1: line, 2: smooth curve, 3: full curve, -1: m, -2: z),
+      //                     pc: parameter control 0-1 xy, 2-3 quad cp, 4-6 cube cp, 8-12 arc params
+      //                     l:  accumulation length, a: absolute flag
+      var commands = {
+          H: { c: "H", t:  1, pc: [0],                      l: 2, a: true  }, 
+          h: { c: "H", t:  1, pc: [0],                      l: 2, a: false }, 
+          V: { c: "V", t:  1, pc: [1],                      l: 2, a: true  }, 
+          v: { c: "V", t:  1, pc: [1],                      l: 2, a: false }, 
+          L: { c: "L", t:  1, pc: [0, 1],                   l: 2, a: true  }, 
+          l: { c: "L", t:  1, pc: [0, 1],                   l: 2, a: false }, 
+          T: { c: "Q", t:  2, pc: [0, 1],                   l: 4, a: true  }, 
+          t: { c: "Q", t:  2, pc: [0, 1],                   l: 4, a: false }, 
+          Q: { c: "Q", t:  3, pc: [2, 3, 0, 1],             l: 4, a: true  }, 
+          q: { c: "Q", t:  3, pc: [2, 3, 0, 1],             l: 4, a: false }, 
+          S: { c: "C", t:  2, pc: [6, 7, 0, 1],             l: 8, a: true  }, 
+          s: { c: "C", t:  2, pc: [6, 7, 0, 1],             l: 8, a: false }, 
+          C: { c: "C", t:  3, pc: [4, 5, 6, 7, 0, 1],       l: 8, a: true  }, 
+          c: { c: "C", t:  3, pc: [4, 5, 6, 7, 0, 1],       l: 8, a: false }, 
+          A: { c: "A", t:  3, pc: [8, 9, 10, 11, 12, 0, 1], l: 2, a: true  }, 
+          a: { c: "A", t:  3, pc: [8, 9, 10, 11, 12, 0, 1], l: 2, a: false }, 
+          M: { c: "M", t: -1, pc: [0, 1],                         a: true  }, 
+          m: { c: "M", t: -1, pc: [0, 1],                         a: false }, 
+          Z: { c: "z", t: -2, pc: [],                                      }, 
+          z: { c: "z", t: -2, pc: [],                                      }, 
+      };
+
+      var nextToken = function() {
+        var m = tre.exec(input);
+        if (!m) { input = null; return m; } // no match, stop tokenizer
+        if (m[1]) return commands[m[1]];    // command
+        if (m[2]) return parseFloat(m[2]);  // number
+      };
+      tre.lastIndex = 0;
+      
+      if (qre.test(input) && (ct = nextToken())) {
+        po.p = [];
+        
+        //
+        // command loop
+        //
+        commands: while (ct && typeof ct === "object") {
+          cc = ct;
+          cna = cc.pc.length;
+          is = 0;
+          //
+          // argument loop
+          //
+          arguments: do {
+            for (i = is, is = 0; i < cna; i++)
+              if (typeof (ca[i] = nextToken()) !== "number")
+                throw new Error("path string has missing or malformed arguments");
+            
+            //
+            // case 1: start a new subpath (moveto command or first subpath)
+            //
+            if (!c || cc.t === -1) {
+              // check preconditions
+              if (po.p.length === 0 && cc.t !== -1) throw new Error("path string does not start with moveto command");
+              if (cc.t === 5) throw new Error("path string contains empty subpath");
+
+              // handle moveto, part 1
+              if (cc.t === -1) {
+                if (po.p.length === 0) { // start from 0,0
+                  ivx = ivy = 0;
+                }
+                else { // start from last current point
+                  c = c || po.p[po.p.length - 1]; // resurrect c for a moment
+                  ivx = c._h[0];
+                  ivy = c._h[1];
+                }
+                ivx = cc.a ? ca[0] : ivx + ca[0];
+                ivy = cc.a ? ca[1] : ivy + ca[1];
+              }
+            
+              // start new subpath
+              po.p.push(c = {
+                s  : -1, // sample start in overall path (set in crossCheck)
+                l  : -1, // sample length in overall path (set in crossCheck)
+                t  : ["", ""], // open/closed (interpolation values < tv, >= tv, starts open, closed by closepath)
+                tv : -1, // no opening/closing during interpolation (can be changed in crossCheck)
+                vs : [[ivx, ivy, 0]], // vertex/sample index array
+                ss : [[ivx, ivy]],    // sample array
+                w  : 0,          // winding accumulator (handled by closepath)
+                c  : [ivx, ivy], // center of gravity accumulator (handled in crossCheck)
+                p  : 0,          // phi (calculated in crossCheck)
+                _h : new Array(N_ACCS), // accummulators used while building this subpath
+                _t : null,
+              });
+              c._h[0] = ivx; c._h[1] = ivy;
+              currPolyLen = 0; currPathLen = 0; tpl = -1;
+              samplePS = "M" + ivx + " " + ivy + " ";
+              
+              // handle moveto, part 2
+              if (cc.t === -1) {
+                cc = cc.a ? commands.L : commands.l; // masquerade as a lineto of correct relativity
+                continue arguments;
+              }
+            }
+            
+            //
+            // case 2: closepath command
+            //
+            if (cc.t === -2) {
+              c.t[0] = c.t[1] = "z"; // mark subpath closed
+              if (ivx !== c._h[0] && ivy !== c._h[1])
+                c.w += (ivx - c._h[0]) * (ivy + c._h[1]); // finish winding
+              c = null; // see you in crossCheck ;)
+              
+              // if there are more tokens...
+              if ((ct = nextToken()) && typeof ct === "object")
+                continue commands;
+              else if (typeof ct === "number")
+                throw new Error("path string has numbers after closepath command");
+              else
+                break commands; // we're done with the entire path string
+            }
+            
+            //
+            // case 3: drawing commands
+            //
+            //   - step 1: getting to _t(here) from _h(ere)
+            c._t = c._h.slice(0, cc.l);                              // relevant accumulators
+            if (cc.l == 8 && c._t[2]) c._t[2] = c._t[3] = undefined; // special case: kill quad spline accumulator. 
+            for (i = 0; i < cna; i++)
+              c._t[cc.pc[i]] = (cc.a ? ca[i]                         // update from current arguments
+                                     : c._t[cc.pc[i] % 2] + ca[i]);  // relative to current point
+
+            //   - step 2: vertex updates
+            hx = c._h[0]; hy = c._h[1]; tx = c._t[0]; ty = c._t[1];  // old and new absolute vertices.
+            c.c[0] += tx; c.c[1] += ty;                              // add to cog accumulation.
+            dx = tx - hx; dy = ty - hy; sy = ty + hy;                // get deltas and sum
+            polySegLen = Math.sqrt(dx * dx + dy * dy);               // for length, and
+            c.w += dx * sy;                                          // for winding.
+            
+            //   - step 3: handle smooth control points
+            nc = commands[cc.c];                                     // get normalized command.
+            if (cc.t === 2) {
+              var ofs = (nc.l - 4) / 2;                              // FIXME annoying offset (S vs. T)
+              if (typeof c._h[nc.pc[ofs]] === "number") {            // there is a previous control point,
+                c._t[nc.pc[0]] = hx + (hx - c._h[nc.pc[ofs]]);       // so reflect it
+                c._t[nc.pc[1]] = hy + (hy - c._h[nc.pc[ofs+1]]);     // across the last vertex.
+              }
+              else c._t[nc.pc[0]] = hx; c._t[nc.pc[1]] = hy;         // use the last vertex itself.
+            }
+            
+            //   - step 4: find the right amount of samples
+            //
+            //       - case a: straight line -> one sample
+            if (cc.t === 1) {
+              c.vs.push([tx, ty, c.ss.length]);                      // store current vertex.
+              c.ss.push([tx, ty]);                                   // store current sample.
+              currPolyLen += polySegLen; currPathLen += polySegLen;  // update total lengths.
+              samplePS += nc.c;                                      // update sample path string with
+              for (i = 0; i < nc.pc.length; i++) {                   // normalized command and all
+                samplePS += c._t[nc.pc[i]]; samplePS += " ";         // parameters.
+              }
+              c._h = c._t; c._t = null;                              // flip accumulators.
+              continue arguments;                                    // done.
+            }
+            
+            //       - case b: not a straight line.
+            //
+            //         TODO: could test control points / parameters here to avoid
+            //               sampling obviously straight lines.
+            if (!samplePE || tpl == -1) {
+              if (!samplePE) samplePE = createPathElement(samplePS); // get a path element
+              else samplePE.setAttribute("d", samplePS);             // set up correctly, and
+              tpl = samplePE.getTotalLength();                       // calibrated.
+              if (currPathLen - tpl > 0.01)
+                console.log("Warning: length calc problem. " + currPathLen + " !== " + tpl);
+              currPathLen = tpl;
+            }
+
+            spsp = "M" + hx + " " + hy + " ";         // path string prefix for current position
+            spsl = nc.c;                              // build a path string from the current
+            for (i = 0; i < nc.pc.length; i++) {      // normalized command and all
+              spsl += c._t[nc.pc[i]]; spsl += " ";    // parameters.
+            }
+            samplePS += spsl;                         // add it to samplePS for future reference
+            samplePE.setAttribute("d", spsp + spsl);  // set up samplePE with local prefix, and
+            pathSegLen = samplePE.getTotalLength();   // measure it.
+
+            //
+            // adaptive sampling loop
+            //
+            // start the queue with the current segment.
+            queue = [ { s: [hx, hy], e: [tx, ty], off: 0, pol: polySegLen, pal: pathSegLen } ];
+            do {
+              cand = queue.shift();
+              // pol^2 must be at least minPrec % of pal^2
+              // or less than MIN_SEGMENT (default: 2. IMPORTANT! Only you can prevent infinite loops. ;) )
+              if (minPrec < (100 - (cand.pal * cand.pal - cand.pol) * 100 / (cand.pal * cand.pal))
+                  || cand.pol < MIN_SEGMENT) { 
+                accept.push(cand);
+              }
+              else { // split it up
+                mid = samplePE.getPointAtLength(cand.off + cand.pal / 2);
+                queue.push( {
+                    s:   cand.s,
+                    e:   [mid.x, mid.y],
+                    off: cand.off,
+                    pol: Math.pow(cand.s[0] - mid.x, 2) + Math.pow(cand.s[1] - mid.y, 2),
+                    pal: cand.pal / 2 },
+                  {
+                    s:   [mid.x, mid.y],
+                    e:   cand.e,           
+                    off: cand.off + cand.pal / 2,
+                    pol: Math.pow(cand.e[0] - mid.x, 2) + Math.pow(cand.e[1] - mid.y, 2),
+                    pal: cand.pal / 2 } );
+              }
+            } while (queue.length > 0);
+            
+            accept.sort(function(l, r) { return l.off - r.off; }); // order by offset
+            while ((cand = accept.shift()))
+              c.ss.push([cand.e[0], cand.e[1]]);         // store samples.
+            c.vs.push([tx, ty, c.ss.length - 1]);        // store vertex (at last sample).
+            currPathLen += pathSegLen;                   // update lengths.
+            currPolyLen += pathSegLen;
+            c._h = c._t; c._t = null;                    // flip accumulators, and done.
+            
+          } while (typeof (ca[is++] = nextToken()) === "number"); // end of argument loop
+
+          // don't lose that command if there was one.
+          ct = ca[is - 1]; is = 0;
+          
+        } // end of command loop
+        
+        // normalize everything
+        normalizePathObject(po);
+        
+      } // end of qualifying condition
+    },
+    normalizePathObject = function(po) { // po -> update po | set/correct cog, phi, winding, length 
+      // TODO not implemented yet
+      // relevant aspects:
+      //   - vertices:
+      //       - general sanity (? config?)
+      //       - vertex on first sample present
+      //       - vertex on last sample present (open) / NOT present (closed)
+      //   - metrics
+      //       - po length (path + poly) XXX collect in cspo
+      //       - po area (for open, too - good indicator for closing time)
+      //       - cogs per po and overall. sample cog??
+      //       - phi per po
+      //   - additional fixups
+      //       - normalize winding (configurable?)
     },
     pathStringFrom = { // se (tagname) -> ps | return a new path string from the attributes of a <tagname> element
         rect : function(e) { // FIXME units
@@ -349,7 +523,7 @@
           if (!points || /none/.test(points)) return d;
 
           d += "M";
-          while ((coords = pathRegs.polyPointsTokenizer.exec(points))) {
+          while ((coords = morphRegs.polyPointsTokenizer.exec(points))) {
             // polyPointsTokenizer matches number pairs, separated by whitespace and commas;
             // if there's an odd number of numbers, the last is ignored (complies with SVG spec)
             d += coords[1];
@@ -357,20 +531,12 @@
           }
           return d;
         },
-        polygon : function(e) {
-          var points = e.getAttribute("points"),
-              coords, d = "";
+        polygon : function(e) { // just a closed polyline
+          var d = pathStringFrom.polyline(e);
 
-          if (!points || /none/.test(points)) return d;
+          if (d !== "")
+            d += "z";
 
-          d += "M";
-          while ((coords = pathRegs.polyPointsTokenizer.exec(points))) {
-            // polyPointsTokenizer matches number pairs, separated by whitespace and commas;
-            // if there's an odd number of numbers, the last is ignored (complies with SVG spec)
-            d += coords[1];
-            d += " ";
-          }
-          d += "z";
           return d;
         },
     },
@@ -381,7 +547,7 @@
       a = es.attributes;
       if (a && (al = a.length))
         for (var i = 0; i < al; i++)
-          if (!/^(?:r?[xy]?|c[xy]|[xy][12]|width|height|points)$/.test(a[i].name))
+          if (!morphRegs.geoPropQualifier.test(a[i].name)) // TODO: factor out
             ep.setAttribute(a[i].name, a[i].value);
 
       // create/modify id
@@ -414,19 +580,20 @@
       console.log("cannot convert " + e.tagName + " to path element");
       return null;
     },
-    createPathObject = function(v) { // s_OR_ps -> po | return new path object from selector or path string
+    createPathObject = function(v, minPrec) { // s_OR_ps -> po | return new path object from selector or path string, sampling at minPrec
       var p = {}, el;
       
       if (v) {
-        if (/^[.#]/.test(v)) // looks like a selector
+        if (morphRegs.selectorQualifier.test(v)) // looks like a selector
           el = document.querySelector(v);
-        else if (pathRegs.minimalQualifier.test(v)) // looks like a path string
+        else if (morphRegs.minimalPathQualifier.test(v)) // looks like a path string
           el = createPathElement(v);
       }
       
       if (el) { // turn anything we know how to into a path element and build a path object from it
         if ((p.e = ensurePathElement(el))
             && (p.o = p.e.getAttribute("d"))) {
+          createSubpathObjects(p, minPrec);
           return p;
         }
       }
@@ -434,25 +601,31 @@
       console.log("createPathObject got '" + v + "', found " + el);
       return null;
     },
-    centerOfGravity = function (points) { // pa -> p | point at center of gravity of an array of points
-      var cog = [0, 0], l = points.length, i;
-      for (i = 0; i < l; i++) {
-        cog[0] += points[i][0];
-        cog[1] += points[i][1];
+    flattenPathObjects = function() { // po+ -> each po side effects | dump subpath objects into d, empty ss
+      var csp, i, spo, p, a, argc = arguments.length;
+      
+      for (a = 0; a < argc; a++) {
+        p = arguments[a];
+        csp = 0;
+        p.d = [];
+        for (i = 0; i < p.p.length; i++) {
+          spo = p.p[i];
+          spo.l = spo.ss.length * 2;
+          spo.s = csp;
+          while (spo.ss.length > 0)
+            Array.prototype.push.apply(p.d, spo.ss.shift());
+
+          csp += spo.l
+        }
       }
-      cog[0] /= l;
-      cog[1] /= l;
-      return cog;
     },
-    phi = function(point, cog) { // angle between vector from cog to point, normalized to [-1..1]
-      var v = [point[0] - cog[0], point[1] - cog[1]],
-          phiRad = Math.atan2(v[1], v[0]); // note reversed x and y on atan2
-      return phiRad / Math.PI; // normalize to [-1..1]
+    phi = function(p, c) { // angle between vector from cog to point, normalized to [-1..1]
+      return Math.atan2(p[1] - c[1], p[0] - c[0]) / Math.PI; // note reversed x and y on atan2 
     },
-    alignOrientation = function (start, end, impliedRotation) { // pa, pa, n -> pa | returns end, shifted to minimize phi distance of end[0] and start[0], with optional offset
+    alignOrientationOLD = function (start, end, impliedRotation) { // pa, pa, n -> pa | returns end, shifted to minimize phi distance of end[0] and start[0], with optional offset
       var impRot = (impliedRotation % 180) / 180,
-      startCog = centerOfGravity(start),
-      endCog   = centerOfGravity(end),
+      startCog = [0, 0], // centerOfGravity(start),
+      endCog   = [0, 0], // centerOfGravity(end),
       startPhi = phi(start[0], startCog),
       endPhi = phi(end[0], endCog), // for testing
       l = end.length, i, d, bi, bd = Infinity;
@@ -468,49 +641,34 @@
       if (bi != 0) // unless alignment was OK, shift start vertex
         end = end.splice(bi).concat(end.splice(0, bi));
 
-      //console.log("ir was: " + (endPhi - startPhi)*180 + " anticipated: " + impRot * 180 + " now: " + (phi(end[0], endCog) - startPhi)*180);
       return end;
     },
     computePathCross = function(s, e) { // po, po -> updated po, po | update sample arrays to morph between path objects s and e
-      var s_sa, e_sa, tmp_sa, samples,
-        index = this.options.morphIndex, impRot = this.options.impliedRotation;
+      var p, index = this.options.morphIndex, impRot = this.options.impliedRotation;
 
       // if the shape of the end element changed after it was parsed, get a new instance
       // not doing this will mess up sampling on to()-tweens that have their target as their end state
       if (e.e === this.element && e.e.getAttribute("d") !== e.o)
         e.e = createPathElement(e.o);
 
-      if (!this._isPolygon) {
-        samples = getSamples(s.e, e.e, this.options.morphPrecision);
-        s_sa = samples[0]; e_sa = samples[1];
-      }
-      else {
-        s_sa = pathStringToVertices(s.o); e_sa = pathStringToVertices(e.o);
-        if (s_sa.length < e_sa.length)
-          s_sa = expandToNSamples(s_sa, e_sa.length, expandTools.dup);
-        else if (s_sa.length > e_sa.length)
-          e_sa = expandToNSamples(e_sa, s_sa.length, expandTools.dup);
-      }
-
-      // reverse arrays
-      if (this.options.reverseFirstPath) { s_sa.reverse(); }
-      if (this.options.reverseSecondPath) { e_sa.reverse(); }
-
-      // shift second array to for smallest tween distance
-      if (index) {
-        var tmp_sa = e_sa.splice(index, e_sa.length-index);
-        e_sa = tmp_sa.concat(e_sa);
-      }
-      else { // automatic rotation
-        e_sa = alignOrientation(s_sa, e_sa, impRot || 0);
-      }
-
-      s.d = s_sa;
-      e.d = e_sa;
+      // XXX missing: subpath mapping
+      // for now: either the subpath counts match, or we only deal with subpath 0
+      if (s.p.length !== e.p.length) s.p.length = e.p.length = 1;
+      for (p = 0; p < e.p.length; p++)
+        matchSampleCounts(s, p, e, p);
+      
+      // XXX missing:
+      //   - force reverse
+      //   - index / autorotate
+      
+      // get ready to draw
+      flattenPathObjects(s, e);
     };
 
-  // set default morphPrecision since 1.6.1
-  defaultOptions.morphPrecision = 15;
+    
+  // set default options since 1.6.1
+  defaultOptions.morphPrecision = 15; // uniform sampling: max path length between samples, in pixels
+  defaultOptions.samplePrecision = 99.5; // adaptive sampling: min polyline length as a percentage of corresponding spline/arc length  
 
   parseProperty.path = function(o, v) { // const 'path', s_OR_ps -> po + side effects | build path object; also, verify/fix type of this.element and register the render function 
     // test eligibility for path morphing
@@ -523,12 +681,16 @@
     if (!('path' in DOM)) {
       DOM.path = function(l, p, a, b, v) {
         l.setAttribute("d", v === 1 ? b.o : coords(a, b, v));
-        //l.setAttribute("d", v === 1 ? b.o : coords_simple(a.d, b.d, b.d.length, v)); // single closed path version
       }
     }
 
+    // pick up relevant options
+    this.options.samplePrecision = this.options && 'samplePrecision' in this.options ? parseFloat(this.options.samplePrecision) : defaultOptions.samplePrecision;
+    if (this.options.samplePrecision > 99.99) this.options.samplePrecision = 99.99;
+    if (this.options.samplePrecision < 0.01) this.options.samplePrecision = 0.01;
+    
     // actually parse the property
-    return createPathObject(v);
+    return createPathObject(v, this.options.samplePrecision);
   };
 
   prepareStart.path = function(p) { // const 'path' -> ps | returns current path string of target element 
@@ -540,7 +702,6 @@
 
     // path tween options
     this.options.morphPrecision = this.options && 'morphPrecision' in this.options ? parseInt(this.options.morphPrecision) : defaultOptions.morphPrecision;
-    this._isPolygon = !/[CSQTA]/i.test(s.o) && !/[CSQTA]/i.test(e.o); // check if both shapes are polygons
 
     // begin processing paths
     computePathCross.call(this, s, e);
